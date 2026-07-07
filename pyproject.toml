@@ -8,6 +8,7 @@ dependencies = [
   "openai>=1.50",
   "python-dotenv>=1.0",
   "markdown>=3.6",
+  "python-pptx>=0.6",
 ]
 
 [build-system]

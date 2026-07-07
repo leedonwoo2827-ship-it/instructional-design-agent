@@ -20,6 +20,7 @@ load_dotenv(encoding="utf-8-sig")  # 메모장 저장 .env 의 BOM 허용
 from core import llm as llm_mod  # noqa: E402
 from core import prompts  # noqa: E402
 from core import user_settings as settings_mod  # noqa: E402
+from core.pptx_export import outline_to_pptx  # noqa: E402
 from core.viz import (  # noqa: E402
     ICON_DOC, ICON_INFO, ICON_SLIDE, bloom_chart_html, bloom_counts,
 )
@@ -101,7 +102,7 @@ MODE_CHOICES = ["대면", "온라인(실시간)", "온라인(비동기·동영�
 STEP_META = [
     (1, "강의 정보 입력", "과목 · 대상 · 운영 방식"),
     (2, "강의계획서", "목표–평가–주차 정렬"),
-    (3, "원고", "문서형 원고 / PPT 개요"),
+    (3, "원고", "교재 / PPT 개요"),
 ]
 REFINE_TMPL = (
     "다음 요청대로 수정하여, 수정된 문서 전체를 다시 출력해 주세요. "
@@ -117,10 +118,11 @@ ss.setdefault("settings", settings_mod.load())
 ss.setdefault("step", 1)
 ss.setdefault("syllabus_md", "")
 ss.setdefault("syllabus_msgs", [])
-ss.setdefault("script_md", "")
-ss.setdefault("script_msgs", [])
 ss.setdefault("script_week", 1)
-ss.setdefault("fmt", "doc")
+ss.setdefault("script_doc_md", "")   # 교재
+ss.setdefault("script_ppt_md", "")   # PPT 개요
+ss.setdefault("script_doc_msgs", [])
+ss.setdefault("script_ppt_msgs", [])
 ss.setdefault("ping_status", None)
 ss.setdefault("form", {})
 ss.setdefault("had_key", bool((ss.settings.api_key or "").strip()))
@@ -191,7 +193,7 @@ def syllabus_user_msg(f: dict) -> str:
 
 
 def script_user_msg(week: int, fmt: str, note: str, syllabus_md: str) -> str:
-    kind = "문서형 차시 원고(강의안+대본)" if fmt == "doc" else "PPT 슬라이드 개요"
+    kind = "학생용 교재(읽기 자료)" if fmt == "doc" else "PPT 슬라이드 개요"
     extra = f"\n[교수자 추가 요청] {note}\n" if note.strip() else ""
     return (
         f"아래는 확정된 강의계획서입니다. 이 계획서의 {week}주차에 대한 {kind}를 작성해 주세요. "
@@ -201,15 +203,15 @@ def script_user_msg(week: int, fmt: str, note: str, syllabus_md: str) -> str:
 
 
 def out_name(kind: str) -> str:
+    """kind: 'syllabus' | '교재' | 'PPT개요'"""
     title = (ss.form.get("title") or "강의").strip() or "강의"
     if kind == "syllabus":
         return f"{title}_강의계획서"
-    label = "원고" if ss.fmt == "doc" else "PPT개요"
-    return f"{title}_{ss.script_week}주차_{label}"
+    return f"{title}_{ss.script_week}주차_{kind}"
 
 
 def run_pending(pending: dict, placeholder) -> None:
-    """좌측 버튼이 예약한 생성/수정/점검 작업을 우측에서 실행."""
+    """예약된 생성/수정/점검을 우측 placeholder 에 실행. doc: syllabus | script_doc | script_ppt."""
     kind, doc = pending["kind"], pending["doc"]
     if doc == "syllabus":
         if kind == "check":
@@ -222,19 +224,25 @@ def run_pending(pending: dict, placeholder) -> None:
             if full:
                 ss.syllabus_md = full
                 ss.syllabus_msgs.append({"role": "assistant", "content": full})
-    else:  # script
-        sys_s = prompts.SYS_SCRIPT_DOC if ss.fmt == "doc" else prompts.SYS_SCRIPT_PPT
-        _wk = f"{ss.script_week}주차 " + ("원고" if ss.fmt == "doc" else "PPT 개요")
-        if kind == "check":
-            msgs = [{"role": "user", "content": f"다음 산출물을 점검해 주세요.\n\n{ss.script_md}"}]
-            rep = stream_into(placeholder, prompts.SYS_CHECK_SCR, msgs, label=f"{_wk} 점검")
-            if rep:
-                ss.script_md += f"\n\n---\n\n## 정렬 점검 보고\n\n{rep}"
-        else:
-            full = stream_into(placeholder, sys_s, ss.script_msgs, label=_wk)
-            if full:
-                ss.script_md = full
-                ss.script_msgs.append({"role": "assistant", "content": full})
+        return
+
+    # script_doc(교재) | script_ppt(PPT 개요)
+    is_doc = doc == "script_doc"
+    sys_gen = prompts.SYS_SCRIPT_DOC if is_doc else prompts.SYS_SCRIPT_PPT
+    md_key = "script_doc_md" if is_doc else "script_ppt_md"
+    msgs_key = "script_doc_msgs" if is_doc else "script_ppt_msgs"
+    wk = f"{ss.script_week}주차 " + ("교재" if is_doc else "PPT 개요")
+    if kind == "check":
+        cur = ss[md_key]
+        msgs = [{"role": "user", "content": f"다음 산출물을 점검해 주세요.\n\n{cur}"}]
+        rep = stream_into(placeholder, prompts.SYS_CHECK_SCR, msgs, label=f"{wk} 점검")
+        if rep:
+            ss[md_key] = cur + f"\n\n---\n\n## 정렬 점검 보고\n\n{rep}"
+    else:  # gen | refine
+        full = stream_into(placeholder, sys_gen, ss[msgs_key], label=wk)
+        if full:
+            ss[md_key] = full
+            ss[msgs_key].append({"role": "assistant", "content": full})
 
 
 # ---------------------------------------------------------------------------
@@ -362,17 +370,11 @@ with left:
                 st.rerun()
 
         else:  # STEP 3
-            st.markdown(f'<div class="ida-panel-title">{ICON_SLIDE}원고 설정 · STEP 3</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="ida-panel-title">{ICON_SLIDE}산출물 생성 · STEP 3</div>', unsafe_allow_html=True)
             if not ss.syllabus_md:
-                st.info("원고는 강의계획서의 주차 목표를 상속합니다. 먼저 강의계획서를 생성하세요.")
+                st.info("산출물은 강의계획서의 주차 목표를 상속합니다. 먼저 강의계획서를 생성하세요.")
             else:
-                fmt_label = st.radio("원고 형태", ["문서형 원고", "PPT 개요식"],
-                                     index=0 if ss.fmt == "doc" else 1, horizontal=True)
-                ss.fmt = "doc" if fmt_label == "문서형 원고" else "ppt"
-                if ss.fmt == "doc":
-                    st.caption("강의 전달용 대본 — 도입(Hook)·활동 계열·형성평가 지점, WHERETO 사후 점검.")
-                else:
-                    st.caption("Mayer 원리 기반 슬라이드 아웃라인 — 한 슬라이드 한 메시지·시각자료·발표자 노트.")
+                st.caption("선택한 주차에 대해 **학생용 교재**와 **PPT 개요**를 함께 생성합니다. (각각 수정·점검·저장 가능)")
                 n_weeks = int(ss.form.get("weeks", 15))
                 week_opts = list(range(1, n_weeks + 1))
                 ss.script_week = st.selectbox("대상 주차", week_opts,
@@ -381,76 +383,120 @@ with left:
                                               format_func=lambda w: f"{w}주차")
                 note = st.text_area("해당 차시 요청사항 (선택)", key="script_note",
                                     placeholder="예: 사례 중심으로, 조별 토론 20분 포함, 동영상 강의용 등")
-                if st.button("원고 생성 →", type="primary", use_container_width=True):
+                if st.button("교재 + PPT 개요 생성 →", type="primary", use_container_width=True):
                     if ensure_ready():
-                        ss.script_msgs = [{"role": "user",
-                                           "content": script_user_msg(ss.script_week, ss.fmt, note, ss.syllabus_md)}]
-                        ss._pending = {"kind": "gen", "doc": "script"}
+                        ss.script_doc_msgs = [{"role": "user",
+                                               "content": script_user_msg(ss.script_week, "doc", note, ss.syllabus_md)}]
+                        ss.script_ppt_msgs = [{"role": "user",
+                                               "content": script_user_msg(ss.script_week, "ppt", note, ss.syllabus_md)}]
+                        ss._pending = {"kind": "gen_both", "doc": "script"}
                         st.rerun()
-                if st.button("목표 정렬 · WHERETO 점검", use_container_width=True):
-                    if ss.script_md and ensure_ready():
-                        ss._pending = {"kind": "check", "doc": "script"}
-                        st.rerun()
-                    elif not ss.script_md:
-                        st.warning("먼저 원고를 생성하세요.")
 
 
 # ---------------------------------------------------------------------------
 # 우측 — 출력 패널
 # ---------------------------------------------------------------------------
 with right:
-    is_script = ss.step == 3
-    kind_name = "script" if is_script else "syllabus"
-    title = "원고" if is_script else "강의계획서"
-    stored_md = ss.script_md if is_script else ss.syllabus_md
+    if ss.step != 3:
+        # ===== 강의계획서 (STEP 1·2) =====
+        with st.container(border=True):
+            hc = st.columns([3, 1.1, 1.5])
+            hc[0].markdown(f'<div class="ida-panel-title">{ICON_DOC}강의계획서</div>', unsafe_allow_html=True)
+            if ss.syllabus_md:
+                hc[1].download_button("MD", ss.syllabus_md, file_name=out_name("syllabus") + ".md",
+                                      mime="text/markdown", use_container_width=True)
+                hc[2].download_button("DOC 저장", md_to_doc_bytes(ss.syllabus_md),
+                                      file_name=out_name("syllabus") + ".doc",
+                                      mime="application/msword", use_container_width=True)
+            if ss.syllabus_md and not pending:
+                _chart = bloom_chart_html(bloom_counts(ss.syllabus_md))
+                if _chart:
+                    st.markdown(_chart, unsafe_allow_html=True)
 
-    with st.container(border=True):
-        hc = st.columns([3, 1.1, 1.5])
-        _ticon = ICON_SLIDE if (is_script and ss.fmt == "ppt") else ICON_DOC
-        hc[0].markdown(f'<div class="ida-panel-title">{_ticon}{title}</div>', unsafe_allow_html=True)
-        if stored_md:
-            hc[1].download_button("MD", stored_md, file_name=out_name(kind_name) + ".md",
-                                  mime="text/markdown", use_container_width=True)
-            hc[2].download_button("DOC 저장", md_to_doc_bytes(stored_md),
-                                  file_name=out_name(kind_name) + ".doc",
-                                  mime="application/msword", use_container_width=True)
-
-        # 인지수준 분포 차트 (강의계획서에 한함, 목표 태그가 있을 때)
-        if (not is_script) and stored_md and not pending:
-            _chart = bloom_chart_html(bloom_counts(stored_md))
-            if _chart:
-                st.markdown(_chart, unsafe_allow_html=True)
-
-        out_ph = st.empty()
-
-        if pending:
-            _k = pending["kind"]
-            if _k == "check":
-                _msg = "정렬 점검 중… (Bloom 분포 · 목표–평가 정렬 · WHERETO)"
-            elif _k == "refine":
-                _msg = "수정 반영 중…"
-            elif pending["doc"] == "syllabus":
-                _msg = "강의계획서 작성 중… (목표 설계 → 주차 분해 → 정렬 매트릭스)"
+            out_ph = st.empty()
+            if pending and pending.get("doc") == "syllabus":
+                _m = "수정 반영 중…" if pending["kind"] == "refine" else (
+                    "정렬 점검 중… (Bloom 분포 · 목표–평가 정렬)" if pending["kind"] == "check"
+                    else "강의계획서 작성 중… (목표 설계 → 주차 분해 → 정렬 매트릭스)")
+                with st.spinner(_m):
+                    run_pending(pending, out_ph)
+                st.rerun()
+            elif ss.syllabus_md:
+                out_ph.markdown(ss.syllabus_md)
             else:
-                _msg = f"{ss.script_week}주차 {'원고' if ss.fmt == 'doc' else 'PPT 개요'} 작성 중…"
-            with st.spinner(_msg):
-                run_pending(pending, out_ph)
-            st.rerun()
-        elif stored_md:
-            out_ph.markdown(stored_md)
-        else:
-            msg = ("좌측에서 원고 형태·주차를 선택해 생성하세요."
-                   if is_script else "좌측에서 강의 정보를 입력하고 강의계획서를 생성하세요.")
-            out_ph.info(msg)
+                out_ph.info("좌측에서 강의 정보를 입력하고 강의계획서를 생성하세요.")
 
-        if stored_md and not pending:
+            if ss.syllabus_md and not pending:
+                st.divider()
+                rc = st.columns([4, 1])
+                req = rc[0].text_input("수정 요청", key="refine_syllabus", label_visibility="collapsed",
+                                       placeholder="수정 요청 — 예: 7주차 목표를 '분석' 수준으로 높여줘")
+                if rc[1].button("수정 요청", key="refbtn_syllabus", use_container_width=True):
+                    if req.strip() and ensure_ready():
+                        ss.syllabus_msgs.append({"role": "user", "content": REFINE_TMPL.format(req=req)})
+                        ss._pending = {"kind": "refine", "doc": "syllabus"}
+                        st.rerun()
+    else:
+        # ===== 교재 + PPT 개요 (STEP 3) =====
+        def _section(doc_key, md_key, icon, name, is_ppt):
+            cur = ss[md_key]
+            cols = [3, 1, 1, 1.2] if is_ppt else [3, 1.1, 1.5]
+            hc = st.columns(cols)
+            hc[0].markdown(f'<div class="ida-panel-title">{icon}{name}</div>', unsafe_allow_html=True)
+            fn = out_name("PPT개요" if is_ppt else "교재")
+            if cur:
+                hc[1].download_button("MD", cur, file_name=fn + ".md", mime="text/markdown",
+                                      key=f"md_{doc_key}", use_container_width=True)
+                hc[2].download_button("DOC", md_to_doc_bytes(cur), file_name=fn + ".doc",
+                                      mime="application/msword", key=f"doc_{doc_key}", use_container_width=True)
+                if is_ppt:
+                    pptx = outline_to_pptx(cur, deck_title=fn)
+                    if pptx:
+                        hc[3].download_button(
+                            "PPTX", pptx, file_name=fn + ".pptx",
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            key=f"pptx_{doc_key}", use_container_width=True)
+            return st.empty(), st.container()
+
+        with st.container(border=True):
+            doc_ph, doc_ctrl = _section("script_doc", "script_doc_md", ICON_DOC, "교재", False)
             st.divider()
-            rc = st.columns([4, 1])
-            req = rc[0].text_input("수정 요청", key=f"refine_{kind_name}", label_visibility="collapsed",
-                                   placeholder="수정 요청 — 예: 7주차 목표를 '분석' 수준으로 높여줘")
-            if rc[1].button("수정 요청", key=f"refbtn_{kind_name}", use_container_width=True):
-                if req.strip() and ensure_ready():
-                    msgs = ss.script_msgs if is_script else ss.syllabus_msgs
-                    msgs.append({"role": "user", "content": REFINE_TMPL.format(req=req)})
-                    ss._pending = {"kind": "refine", "doc": kind_name}
-                    st.rerun()
+            ppt_ph, ppt_ctrl = _section("script_ppt", "script_ppt_md", ICON_SLIDE, "PPT 개요", True)
+
+            pdoc = pending.get("doc") if pending else None
+            if pending and pending["kind"] == "gen_both":
+                with st.spinner(f"{ss.script_week}주차 교재 작성 중…"):
+                    run_pending({"kind": "gen", "doc": "script_doc"}, doc_ph)
+                with st.spinner(f"{ss.script_week}주차 PPT 개요 작성 중…"):
+                    run_pending({"kind": "gen", "doc": "script_ppt"}, ppt_ph)
+                st.rerun()
+            elif pending and pdoc in ("script_doc", "script_ppt"):
+                tph = doc_ph if pdoc == "script_doc" else ppt_ph
+                _m = {"refine": "수정 반영 중…", "check": "정렬 점검 중…"}.get(pending["kind"], "작성 중…")
+                with st.spinner(_m):
+                    run_pending(pending, tph)
+                st.rerun()
+            else:
+                for ph, ctrl, md_key, msgs_key, doc_key, empty_hint in [
+                    (doc_ph, doc_ctrl, "script_doc_md", "script_doc_msgs", "script_doc",
+                     "좌측에서 '교재 + PPT 개요 생성'을 누르면 교재가 여기에 표시됩니다."),
+                    (ppt_ph, ppt_ctrl, "script_ppt_md", "script_ppt_msgs", "script_ppt",
+                     "PPT 개요가 여기에 표시됩니다. (PPTX 다운로드 지원)"),
+                ]:
+                    if ss[md_key]:
+                        ph.markdown(ss[md_key])
+                        with ctrl:
+                            rc = st.columns([3, 1, 1.3])
+                            req = rc[0].text_input("수정", key=f"refine_{doc_key}", label_visibility="collapsed",
+                                                   placeholder="수정 요청")
+                            if rc[1].button("수정", key=f"refbtn_{doc_key}", use_container_width=True):
+                                if req.strip() and ensure_ready():
+                                    ss[msgs_key].append({"role": "user", "content": REFINE_TMPL.format(req=req)})
+                                    ss._pending = {"kind": "refine", "doc": doc_key}
+                                    st.rerun()
+                            if rc[2].button("정렬 점검", key=f"chk_{doc_key}", use_container_width=True):
+                                if ensure_ready():
+                                    ss._pending = {"kind": "check", "doc": doc_key}
+                                    st.rerun()
+                    else:
+                        ph.info(empty_hint)
