@@ -24,8 +24,71 @@ st.set_page_config(
     page_title="교수설계 가이드 에이전트",
     page_icon="🧑‍🏫",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
+
+# 원본 _context/교수설계-에이전트.html 의 브랜드 디자인을 이식
+_CSS = """
+<style>
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
+:root{--brand:#3b4ec8;--brand2:#2c3aa0;--brand-soft:#eef0fb;--accent:#0ea5a4;
+  --line:#e4e6ea;--ink:#1a1d23;--ink2:#5b6472;--bg:#f4f5f7;}
+html,body,.stApp,[class*="css"]{font-family:'Pretendard',-apple-system,'Malgun Gothic',sans-serif;}
+.stApp{background:var(--bg);}
+[data-testid="stHeader"]{background:transparent;}
+.block-container{max-width:1120px;padding-top:1.1rem;padding-bottom:3rem;}
+
+/* 헤더 카드 */
+.ida-header{display:flex;align-items:center;gap:14px;background:#fff;border:1px solid var(--line);
+  border-radius:14px;padding:14px 18px;margin-bottom:14px;
+  box-shadow:0 1px 3px rgba(20,24,40,.07),0 4px 16px rgba(20,24,40,.05);}
+.ida-logo{width:40px;height:40px;border-radius:10px;flex-shrink:0;
+  background:linear-gradient(135deg,var(--brand),#7c5cd6);display:flex;align-items:center;
+  justify-content:center;color:#fff;font-weight:800;font-size:18px;}
+.ida-title{font-weight:800;font-size:18px;color:var(--ink);line-height:1.25;}
+.ida-sub{font-size:12.5px;color:var(--ink2);}
+
+/* 버튼 */
+.stButton>button,.stDownloadButton>button,.stFormSubmitButton>button{
+  border-radius:9px;font-weight:600;border:1px solid var(--line);transition:.15s;}
+.stButton>button:hover,.stDownloadButton>button:hover{border-color:var(--brand);color:var(--brand);}
+.stButton>button[kind="primary"],.stFormSubmitButton>button[kind="primary"]{
+  background:var(--brand);border-color:var(--brand);color:#fff;}
+.stButton>button[kind="primary"]:hover,.stFormSubmitButton>button[kind="primary"]:hover{
+  background:var(--brand2);border-color:var(--brand2);color:#fff;}
+
+/* 탭 = 스텝 알약 */
+[data-baseweb="tab-list"]{gap:8px;border-bottom:none;}
+[data-baseweb="tab"]{background:#fff;border:1px solid var(--line)!important;border-radius:10px;
+  padding:9px 16px;font-weight:700;}
+[data-baseweb="tab"][aria-selected="true"]{border-color:var(--brand)!important;color:var(--brand);
+  box-shadow:0 1px 3px rgba(20,24,40,.08);}
+[data-baseweb="tab-highlight"],[data-baseweb="tab-border"]{display:none!important;}
+
+/* expander = 카드 */
+[data-testid="stExpander"]{border:1px solid var(--line);border-radius:12px;background:#fff;
+  box-shadow:0 1px 3px rgba(20,24,40,.06);margin-bottom:14px;}
+[data-testid="stExpander"] summary{font-weight:700;color:var(--ink);}
+[data-testid="stExpander"] summary:hover{color:var(--brand);}
+
+/* 입력 */
+.stTextInput input,.stTextArea textarea{border-radius:8px;}
+.stTextInput input:focus,.stTextArea textarea:focus{border-color:var(--brand);box-shadow:none;}
+
+/* 산출물 마크다운 */
+[data-testid="stMarkdownContainer"] h1{font-size:22px;border-bottom:2px solid var(--brand-soft);padding-bottom:8px;}
+[data-testid="stMarkdownContainer"] h2{font-size:17px;color:var(--brand2);margin-top:22px;}
+[data-testid="stMarkdownContainer"] h3{font-size:15px;}
+[data-testid="stMarkdownContainer"] table{border-collapse:collapse;width:100%;font-size:13px;margin:12px 0;}
+[data-testid="stMarkdownContainer"] th{background:var(--brand-soft);color:var(--brand2);font-weight:700;text-align:left;}
+[data-testid="stMarkdownContainer"] th,[data-testid="stMarkdownContainer"] td{border:1px solid var(--line);padding:7px 10px;}
+[data-testid="stMarkdownContainer"] tr:nth-child(even) td{background:#fafbfd;}
+[data-testid="stMarkdownContainer"] blockquote{border-left:3px solid var(--brand);background:var(--brand-soft);
+  padding:8px 14px;border-radius:0 8px 8px 0;}
+[data-testid="stMarkdownContainer"] code{background:#eef0f4;border-radius:4px;padding:1px 5px;}
+</style>
+"""
+st.markdown(_CSS, unsafe_allow_html=True)
 
 WEEK_CHOICES = [8, 10, 13, 15, 16]
 MODE_CHOICES = ["대면", "온라인(실시간)", "온라인(비동기·동영상)", "혼합(블렌디드)", "플립러닝"]
@@ -49,6 +112,8 @@ ss.setdefault("script_week", 1)
 ss.setdefault("fmt", "doc")
 ss.setdefault("ping_status", None)
 ss.setdefault("form", {})
+# 접기/펴기 초기 상태: 저장된 키가 이미 있으면 접힌 채로 시작
+ss.setdefault("had_key", bool((ss.settings.api_key or "").strip()))
 
 
 # ---------------------------------------------------------------------------
@@ -135,38 +200,47 @@ def download_row(md_text: str, kind: str):
 
 
 # ---------------------------------------------------------------------------
-# 사이드바 — 설정
+# 헤더 (원본 HTML 디자인 이식)
 # ---------------------------------------------------------------------------
-with st.sidebar:
-    st.header("⚙️ 연결 설정")
+st.markdown(
+    '<div class="ida-header">'
+    '<div class="ida-logo">교</div>'
+    '<div><div class="ida-title">교수설계 가이드 에이전트</div>'
+    '<div class="ida-sub">ABCD 학습목표 · Bloom 정렬 · 백워드 설계(WHERETO) · Mayer 멀티미디어 원리 기반</div>'
+    '</div></div>',
+    unsafe_allow_html=True,
+)
+
+# ---------------------------------------------------------------------------
+# 연결 설정 — 접기/펴기 (키가 없으면 펼친 채로 시작)
+# ---------------------------------------------------------------------------
+_key_ok = bool((ss.settings.api_key or "").strip())
+_status = "✓ 연결 준비됨" if _key_ok else "API 키를 입력하세요"
+with st.expander(f"⚙️ 연결 설정 — {_status}", expanded=not ss.had_key):
     s = ss.settings
-    s.base_url = st.text_input("LiteLLM URL", value=s.base_url, help="사내 프록시 주소")
-    s.api_key = st.text_input("API 키", value=s.api_key, type="password",
-                              help="사내 대시보드(/ui/)에서 발급한 sk- 키")
+    c = st.columns([2, 2, 1.4])
+    s.base_url = c[0].text_input("LiteLLM URL", value=s.base_url, help="사내 프록시 주소")
+    s.api_key = c[1].text_input("API 키", value=s.api_key, type="password",
+                                help="사내 대시보드(/ui/)에서 발급한 sk- 키")
     model_ids = list(settings_mod.MODELS.keys())
-    s.model = st.selectbox(
+    s.model = c[2].selectbox(
         "모델", model_ids,
         index=model_ids.index(s.model) if s.model in model_ids else 0,
         format_func=lambda m: settings_mod.MODELS[m],
     )
-    c1, c2 = st.columns(2)
-    if c1.button("연결 테스트", use_container_width=True):
+    b1, b2, _ = st.columns([1, 1, 3])
+    if b1.button("연결 테스트", use_container_width=True):
         with st.spinner("확인 중…"):
             ss.ping_status = llm_mod.build_provider(s).ping()
-    if c2.button("💾 저장", use_container_width=True, type="primary"):
+    if b2.button("💾 저장", use_container_width=True, type="primary"):
         settings_mod.save(s)
+        ss.had_key = bool((s.api_key or "").strip())
         st.success("저장되었습니다.")
+        st.rerun()
     if ss.ping_status:
         ok, msg = ss.ping_status
         (st.success if ok else st.error)(msg)
     st.caption("URL·키는 `data/user_settings.json` 에 저장되며 GitHub 에 올라가지 않습니다.")
-
-
-# ---------------------------------------------------------------------------
-# 헤더
-# ---------------------------------------------------------------------------
-st.title("🧑‍🏫 교수설계 가이드 에이전트")
-st.caption("ABCD 학습목표 · Bloom 정렬 · 백워드 설계(WHERETO) · Mayer 멀티미디어 원리 기반")
 
 tab1, tab2, tab3 = st.tabs(["1️⃣ 강의 정보 입력", "2️⃣ 강의계획서", "3️⃣ 원고"])
 
