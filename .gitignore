@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+data/user_settings.json
+.streamlit/
+.DS_Store
+*.egg-info/
+*.tmp.*
+
+# 사내 자료·원본·키 포함 — GitHub 업로드 금지
+_context/
