@@ -137,6 +137,7 @@ def ensure_ready() -> bool:
 def stream_into(placeholder, system: str, messages: list) -> str:
     provider = llm_mod.build_provider(ss.settings)
     full = ""
+    placeholder.markdown("**작성 중…** 잠시만 기다려 주세요. 내용이 이 영역에 실시간으로 나타납니다. ▌")
     try:
         for delta in provider.stream(system, messages,
                                      max_tokens=ss.settings.max_tokens,
@@ -412,7 +413,17 @@ with right:
         out_ph = st.empty()
 
         if pending:
-            run_pending(pending, out_ph)
+            _k = pending["kind"]
+            if _k == "check":
+                _msg = "정렬 점검 중… (Bloom 분포 · 목표–평가 정렬 · WHERETO)"
+            elif _k == "refine":
+                _msg = "수정 반영 중…"
+            elif pending["doc"] == "syllabus":
+                _msg = "강의계획서 작성 중… (목표 설계 → 주차 분해 → 정렬 매트릭스)"
+            else:
+                _msg = f"{ss.script_week}주차 {'원고' if ss.fmt == 'doc' else 'PPT 개요'} 작성 중…"
+            with st.spinner(_msg):
+                run_pending(pending, out_ph)
             st.rerun()
         elif stored_md:
             out_ph.markdown(stored_md)
