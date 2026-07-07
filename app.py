@@ -306,99 +306,162 @@ if "_pending" in ss:
     del ss["_pending"]
 
 st.write("")
-left, right = st.columns([0.37, 0.63], gap="large")
 
-
-# ---------------------------------------------------------------------------
-# 좌측 — 입력 패널 (STEP 별)
-# ---------------------------------------------------------------------------
-with left:
+# ===========================================================================
+# STEP 3 — 전체 폭: 상단 컨트롤 + 교재/PPT 탭 (PPTX 버튼이 상단에서 바로 보임)
+# ===========================================================================
+if ss.step == 3:
     with st.container(border=True):
-        if ss.step == 1:
-            st.markdown(f'<div class="ida-panel-title">{ICON_INFO}강의 기본 정보 · STEP 1</div>', unsafe_allow_html=True)
-            with st.form("lecture_form"):
-                cc = st.columns(2)
-                title = cc[0].text_input("과목명 *", value=ss.form.get("title", ""), placeholder="예: 교육공학의 이해")
-                field = cc[1].text_input("학문 분야", value=ss.form.get("field", ""), placeholder="예: 교육학")
-                cc = st.columns(2)
-                target = cc[0].text_input("수강 대상 *", value=ss.form.get("target", ""), placeholder="예: 학부 2학년")
-                credit = cc[1].text_input("학점 / 시수", value=ss.form.get("credit", ""), placeholder="예: 3학점, 주 3시간")
-                cc = st.columns(2)
-                weeks = cc[0].selectbox("총 주차", WEEK_CHOICES,
-                                        index=WEEK_CHOICES.index(ss.form.get("weeks", 15))
-                                        if ss.form.get("weeks", 15) in WEEK_CHOICES else 3)
-                mode = cc[1].selectbox("강의 방식", MODE_CHOICES,
-                                       index=MODE_CHOICES.index(ss.form.get("mode", "대면"))
-                                       if ss.form.get("mode", "대면") in MODE_CHOICES else 0)
-                topics = st.text_area("주요 내용 · 다루고 싶은 주제 *", value=ss.form.get("topics", ""),
-                                      placeholder="예: 교수설계 이론, ADDIE 모형, 학습목표 설계, 매체 활용 등")
-                learner = st.text_input("수강생 특성 (선수지식 · 이질성 등)", value=ss.form.get("learner", ""),
-                                        placeholder="예: 전공 기초 이수, 일부 현직 교사 포함")
-                policy = st.text_area("평가 선호 · 수업 철학 (선택)", value=ss.form.get("policy", ""),
-                                      placeholder="예: 과정 중심 평가 40%, 토론 중심 운영, 생성형 AI 조건부 허용")
-                st.caption("입력 정보는 학습자 도달점 중심(ABCD)으로 학습목표를 설계하고 목표–주차–평가를 정렬하는 데 쓰입니다.")
-                submitted = st.form_submit_button("강의계획서 생성 →", type="primary", use_container_width=True)
-            if submitted:
-                if not title.strip() or not topics.strip():
-                    st.warning("과목명과 주요 내용은 필수 입력입니다.")
-                elif ensure_ready():
-                    ss.form = dict(title=title, field=field, target=target, credit=credit,
-                                   weeks=weeks, mode=mode, topics=topics, learner=learner, policy=policy)
-                    ss.syllabus_msgs = [{"role": "user", "content": syllabus_user_msg(ss.form)}]
-                    ss.step = 2
-                    ss._pending = {"kind": "gen", "doc": "syllabus"}
-                    st.rerun()
-
-        elif ss.step == 2:
-            st.markdown(f'<div class="ida-panel-title">{ICON_INFO}강의계획서 설계 기준 · STEP 2</div>', unsafe_allow_html=True)
-            st.markdown(
-                "- **측정 가능한 학습목표** — ABCD 모델, Bloom 개정분류 동사. 한 목표 한 동사.\n"
-                "- **목표 분해** — 강좌 목표를 주차(모듈) 목표로 분해.\n"
-                "- **정렬 매트릭스** — 주차·평가가 어느 강좌 목표를 지지하는지 추적.\n"
-                "- **인지수준 분포** — 상·하위 수준 쏠림 점검.\n"
-                "- **어조·근거** — 통상과 다른 운영은 근거 명시."
-            )
-            if st.button("정렬 · 인지수준 점검", use_container_width=True):
-                if ss.syllabus_md and ensure_ready():
-                    ss._pending = {"kind": "check", "doc": "syllabus"}
-                    st.rerun()
-                elif not ss.syllabus_md:
-                    st.warning("먼저 강의계획서를 생성하세요.")
-            if st.button("원고 작성으로 이동 →", type="primary", use_container_width=True,
-                         disabled=not ss.syllabus_md):
-                ss.step = 3
-                st.rerun()
-
-        else:  # STEP 3
-            st.markdown(f'<div class="ida-panel-title">{ICON_SLIDE}산출물 생성 · STEP 3</div>', unsafe_allow_html=True)
-            if not ss.syllabus_md:
-                st.info("산출물은 강의계획서의 주차 목표를 상속합니다. 먼저 강의계획서를 생성하세요.")
-            else:
-                st.caption("선택한 주차에 대해 **학생용 교재**와 **PPT 개요**를 함께 생성합니다. (각각 수정·점검·저장 가능)")
-                n_weeks = int(ss.form.get("weeks", 15))
-                week_opts = list(range(1, n_weeks + 1))
-                ss.script_week = st.selectbox("대상 주차", week_opts,
-                                              index=week_opts.index(ss.script_week)
-                                              if ss.script_week in week_opts else 0,
-                                              format_func=lambda w: f"{w}주차")
-                note = st.text_area("해당 차시 요청사항 (선택)", key="script_note",
+        st.markdown(f'<div class="ida-panel-title">{ICON_SLIDE}산출물 생성 · STEP 3</div>', unsafe_allow_html=True)
+        if not ss.syllabus_md:
+            st.info("산출물은 강의계획서의 주차 목표를 상속합니다. 먼저 STEP 1~2에서 강의계획서를 생성하세요.")
+        else:
+            st.caption("선택한 주차에 대해 **학생용 교재**와 **PPT 개요**를 함께 생성합니다. 아래 탭에서 각각 확인·수정·점검·저장하세요.")
+            n_weeks = int(ss.form.get("weeks", 15))
+            week_opts = list(range(1, n_weeks + 1))
+            cc = st.columns([1.3, 3.4, 1.9])
+            ss.script_week = cc[0].selectbox("대상 주차", week_opts,
+                                             index=week_opts.index(ss.script_week)
+                                             if ss.script_week in week_opts else 0,
+                                             format_func=lambda w: f"{w}주차")
+            note = cc[1].text_input("해당 차시 요청사항 (선택)", key="script_note",
                                     placeholder="예: 사례 중심으로, 조별 토론 20분 포함, 동영상 강의용 등")
-                if st.button("교재 + PPT 개요 생성 →", type="primary", use_container_width=True):
-                    if ensure_ready():
-                        ss.script_doc_msgs = [{"role": "user",
-                                               "content": script_user_msg(ss.script_week, "doc", note, ss.syllabus_md)}]
-                        ss.script_ppt_msgs = [{"role": "user",
-                                               "content": script_user_msg(ss.script_week, "ppt", note, ss.syllabus_md)}]
-                        ss._pending = {"kind": "gen_both", "doc": "script"}
+            cc[2].markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            if cc[2].button("교재 + PPT 개요 생성 →", type="primary", use_container_width=True):
+                if ensure_ready():
+                    ss.script_doc_msgs = [{"role": "user",
+                                           "content": script_user_msg(ss.script_week, "doc", note, ss.syllabus_md)}]
+                    ss.script_ppt_msgs = [{"role": "user",
+                                           "content": script_user_msg(ss.script_week, "ppt", note, ss.syllabus_md)}]
+                    ss._pending = {"kind": "gen_both", "doc": "script"}
+                    st.rerun()
+
+    if ss.syllabus_md:
+        def render_script_tab(md_key, doc_key, is_ppt):
+            """탭 내부: 상단 다운로드 버튼 → 본문/컨트롤용 placeholder 반환."""
+            cur = ss[md_key]
+            fn = out_name("PPT개요" if is_ppt else "교재")
+            if cur:
+                dc = st.columns([1, 1, 1, 6]) if is_ppt else st.columns([1, 1, 7])
+                dc[0].download_button("MD", cur, file_name=fn + ".md", mime="text/markdown",
+                                      key=f"md_{doc_key}", use_container_width=True)
+                dc[1].download_button("DOC", md_to_doc_bytes(cur), file_name=fn + ".doc",
+                                      mime="application/msword", key=f"doc_{doc_key}", use_container_width=True)
+                if is_ppt:
+                    pptx = outline_to_pptx(cur, deck_title=fn)
+                    if pptx:
+                        dc[2].download_button(
+                            "PPTX", pptx, file_name=fn + ".pptx",
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            key=f"pptx_{doc_key}", use_container_width=True)
+            return st.empty(), st.container()
+
+        tab_doc, tab_ppt = st.tabs(["교재", "PPT 개요"])
+        with tab_doc:
+            doc_ph, doc_ctrl = render_script_tab("script_doc_md", "script_doc", False)
+        with tab_ppt:
+            ppt_ph, ppt_ctrl = render_script_tab("script_ppt_md", "script_ppt", True)
+
+        pdoc = pending.get("doc") if pending else None
+        if pending and pending["kind"] == "gen_both":
+            with st.spinner(f"{ss.script_week}주차 교재 작성 중…"):
+                run_pending({"kind": "gen", "doc": "script_doc"}, doc_ph)
+            with st.spinner(f"{ss.script_week}주차 PPT 개요 작성 중…"):
+                run_pending({"kind": "gen", "doc": "script_ppt"}, ppt_ph)
+            st.rerun()
+        elif pending and pdoc in ("script_doc", "script_ppt"):
+            tph = doc_ph if pdoc == "script_doc" else ppt_ph
+            _m = {"refine": "수정 반영 중…", "check": "정렬 점검 중…"}.get(pending["kind"], "작성 중…")
+            with st.spinner(_m):
+                run_pending(pending, tph)
+            st.rerun()
+        else:
+            for ph, ctrl, md_key, msgs_key, doc_key, hint in [
+                (doc_ph, doc_ctrl, "script_doc_md", "script_doc_msgs", "script_doc",
+                 "위 '교재 + PPT 개요 생성'을 누르면 교재가 여기에 표시됩니다."),
+                (ppt_ph, ppt_ctrl, "script_ppt_md", "script_ppt_msgs", "script_ppt",
+                 "PPT 개요가 여기에 표시됩니다. (MD·DOC·PPTX 저장 지원)"),
+            ]:
+                if ss[md_key]:
+                    ph.markdown(ss[md_key])
+                    with ctrl:
+                        rc = st.columns([4, 1, 1.3])
+                        req = rc[0].text_input("수정", key=f"refine_{doc_key}", label_visibility="collapsed",
+                                               placeholder="수정 요청 — 예: 예시를 더 추가해줘 / 분량을 줄여줘")
+                        if rc[1].button("수정", key=f"refbtn_{doc_key}", use_container_width=True):
+                            if req.strip() and ensure_ready():
+                                ss[msgs_key].append({"role": "user", "content": REFINE_TMPL.format(req=req)})
+                                ss._pending = {"kind": "refine", "doc": doc_key}
+                                st.rerun()
+                        if rc[2].button("정렬 점검", key=f"chk_{doc_key}", use_container_width=True):
+                            if ensure_ready():
+                                ss._pending = {"kind": "check", "doc": doc_key}
+                                st.rerun()
+                else:
+                    ph.info(hint)
+
+# ===========================================================================
+# STEP 1·2 — 좌측 입력 / 우측 강의계획서
+# ===========================================================================
+else:
+    left, right = st.columns([0.37, 0.63], gap="large")
+    with left:
+        with st.container(border=True):
+            if ss.step == 1:
+                st.markdown(f'<div class="ida-panel-title">{ICON_INFO}강의 기본 정보 · STEP 1</div>', unsafe_allow_html=True)
+                with st.form("lecture_form"):
+                    cc = st.columns(2)
+                    title = cc[0].text_input("과목명 *", value=ss.form.get("title", ""), placeholder="예: 교육공학의 이해")
+                    field = cc[1].text_input("학문 분야", value=ss.form.get("field", ""), placeholder="예: 교육학")
+                    cc = st.columns(2)
+                    target = cc[0].text_input("수강 대상 *", value=ss.form.get("target", ""), placeholder="예: 학부 2학년")
+                    credit = cc[1].text_input("학점 / 시수", value=ss.form.get("credit", ""), placeholder="예: 3학점, 주 3시간")
+                    cc = st.columns(2)
+                    weeks = cc[0].selectbox("총 주차", WEEK_CHOICES,
+                                            index=WEEK_CHOICES.index(ss.form.get("weeks", 15))
+                                            if ss.form.get("weeks", 15) in WEEK_CHOICES else 3)
+                    mode = cc[1].selectbox("강의 방식", MODE_CHOICES,
+                                           index=MODE_CHOICES.index(ss.form.get("mode", "대면"))
+                                           if ss.form.get("mode", "대면") in MODE_CHOICES else 0)
+                    topics = st.text_area("주요 내용 · 다루고 싶은 주제 *", value=ss.form.get("topics", ""),
+                                          placeholder="예: 교수설계 이론, ADDIE 모형, 학습목표 설계, 매체 활용 등")
+                    learner = st.text_input("수강생 특성 (선수지식 · 이질성 등)", value=ss.form.get("learner", ""),
+                                            placeholder="예: 전공 기초 이수, 일부 현직 교사 포함")
+                    policy = st.text_area("평가 선호 · 수업 철학 (선택)", value=ss.form.get("policy", ""),
+                                          placeholder="예: 과정 중심 평가 40%, 토론 중심 운영, 생성형 AI 조건부 허용")
+                    st.caption("입력 정보는 학습자 도달점 중심(ABCD)으로 학습목표를 설계하고 목표–주차–평가를 정렬하는 데 쓰입니다.")
+                    submitted = st.form_submit_button("강의계획서 생성 →", type="primary", use_container_width=True)
+                if submitted:
+                    if not title.strip() or not topics.strip():
+                        st.warning("과목명과 주요 내용은 필수 입력입니다.")
+                    elif ensure_ready():
+                        ss.form = dict(title=title, field=field, target=target, credit=credit,
+                                       weeks=weeks, mode=mode, topics=topics, learner=learner, policy=policy)
+                        ss.syllabus_msgs = [{"role": "user", "content": syllabus_user_msg(ss.form)}]
+                        ss.step = 2
+                        ss._pending = {"kind": "gen", "doc": "syllabus"}
                         st.rerun()
+            else:  # STEP 2
+                st.markdown(f'<div class="ida-panel-title">{ICON_INFO}강의계획서 설계 기준 · STEP 2</div>', unsafe_allow_html=True)
+                st.markdown(
+                    "- **측정 가능한 학습목표** — ABCD 모델, Bloom 개정분류 동사. 한 목표 한 동사.\n"
+                    "- **목표 분해** — 강좌 목표를 주차(모듈) 목표로 분해.\n"
+                    "- **정렬 매트릭스** — 주차·평가가 어느 강좌 목표를 지지하는지 추적.\n"
+                    "- **인지수준 분포** — 상·하위 수준 쏠림 점검.\n"
+                    "- **어조·근거** — 통상과 다른 운영은 근거 명시."
+                )
+                if st.button("정렬 · 인지수준 점검", use_container_width=True):
+                    if ss.syllabus_md and ensure_ready():
+                        ss._pending = {"kind": "check", "doc": "syllabus"}
+                        st.rerun()
+                    elif not ss.syllabus_md:
+                        st.warning("먼저 강의계획서를 생성하세요.")
+                if st.button("산출물(교재·PPT) 작성으로 이동 →", type="primary", use_container_width=True,
+                             disabled=not ss.syllabus_md):
+                    ss.step = 3
+                    st.rerun()
 
-
-# ---------------------------------------------------------------------------
-# 우측 — 출력 패널
-# ---------------------------------------------------------------------------
-with right:
-    if ss.step != 3:
-        # ===== 강의계획서 (STEP 1·2) =====
+    with right:
         with st.container(border=True):
             hc = st.columns([3, 1.1, 1.5])
             hc[0].markdown(f'<div class="ida-panel-title">{ICON_DOC}강의계획서</div>', unsafe_allow_html=True)
@@ -436,67 +499,3 @@ with right:
                         ss.syllabus_msgs.append({"role": "user", "content": REFINE_TMPL.format(req=req)})
                         ss._pending = {"kind": "refine", "doc": "syllabus"}
                         st.rerun()
-    else:
-        # ===== 교재 + PPT 개요 (STEP 3) =====
-        def _section(doc_key, md_key, icon, name, is_ppt):
-            cur = ss[md_key]
-            cols = [3, 1, 1, 1.2] if is_ppt else [3, 1.1, 1.5]
-            hc = st.columns(cols)
-            hc[0].markdown(f'<div class="ida-panel-title">{icon}{name}</div>', unsafe_allow_html=True)
-            fn = out_name("PPT개요" if is_ppt else "교재")
-            if cur:
-                hc[1].download_button("MD", cur, file_name=fn + ".md", mime="text/markdown",
-                                      key=f"md_{doc_key}", use_container_width=True)
-                hc[2].download_button("DOC", md_to_doc_bytes(cur), file_name=fn + ".doc",
-                                      mime="application/msword", key=f"doc_{doc_key}", use_container_width=True)
-                if is_ppt:
-                    pptx = outline_to_pptx(cur, deck_title=fn)
-                    if pptx:
-                        hc[3].download_button(
-                            "PPTX", pptx, file_name=fn + ".pptx",
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                            key=f"pptx_{doc_key}", use_container_width=True)
-            return st.empty(), st.container()
-
-        with st.container(border=True):
-            doc_ph, doc_ctrl = _section("script_doc", "script_doc_md", ICON_DOC, "교재", False)
-            st.divider()
-            ppt_ph, ppt_ctrl = _section("script_ppt", "script_ppt_md", ICON_SLIDE, "PPT 개요", True)
-
-            pdoc = pending.get("doc") if pending else None
-            if pending and pending["kind"] == "gen_both":
-                with st.spinner(f"{ss.script_week}주차 교재 작성 중…"):
-                    run_pending({"kind": "gen", "doc": "script_doc"}, doc_ph)
-                with st.spinner(f"{ss.script_week}주차 PPT 개요 작성 중…"):
-                    run_pending({"kind": "gen", "doc": "script_ppt"}, ppt_ph)
-                st.rerun()
-            elif pending and pdoc in ("script_doc", "script_ppt"):
-                tph = doc_ph if pdoc == "script_doc" else ppt_ph
-                _m = {"refine": "수정 반영 중…", "check": "정렬 점검 중…"}.get(pending["kind"], "작성 중…")
-                with st.spinner(_m):
-                    run_pending(pending, tph)
-                st.rerun()
-            else:
-                for ph, ctrl, md_key, msgs_key, doc_key, empty_hint in [
-                    (doc_ph, doc_ctrl, "script_doc_md", "script_doc_msgs", "script_doc",
-                     "좌측에서 '교재 + PPT 개요 생성'을 누르면 교재가 여기에 표시됩니다."),
-                    (ppt_ph, ppt_ctrl, "script_ppt_md", "script_ppt_msgs", "script_ppt",
-                     "PPT 개요가 여기에 표시됩니다. (PPTX 다운로드 지원)"),
-                ]:
-                    if ss[md_key]:
-                        ph.markdown(ss[md_key])
-                        with ctrl:
-                            rc = st.columns([3, 1, 1.3])
-                            req = rc[0].text_input("수정", key=f"refine_{doc_key}", label_visibility="collapsed",
-                                                   placeholder="수정 요청")
-                            if rc[1].button("수정", key=f"refbtn_{doc_key}", use_container_width=True):
-                                if req.strip() and ensure_ready():
-                                    ss[msgs_key].append({"role": "user", "content": REFINE_TMPL.format(req=req)})
-                                    ss._pending = {"kind": "refine", "doc": doc_key}
-                                    st.rerun()
-                            if rc[2].button("정렬 점검", key=f"chk_{doc_key}", use_container_width=True):
-                                if ensure_ready():
-                                    ss._pending = {"kind": "check", "doc": doc_key}
-                                    st.rerun()
-                    else:
-                        ph.info(empty_hint)
