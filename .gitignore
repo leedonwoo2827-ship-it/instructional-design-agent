@@ -20,5 +20,8 @@ assets/*.potx
 # 생성 산출물(교재·PPT·강의계획서 등) — 커밋 금지
 _assets/
 
+# 전문가 원본 첨삭 자료 — 내부용, 커밋 금지 (반영 결과는 skills/·docs/에 반영)
+_guideline/
+
 # 사내 자료·원본·키 포함 — GitHub 업로드 금지
 _context/
