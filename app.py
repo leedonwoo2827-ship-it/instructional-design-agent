@@ -9,6 +9,7 @@ URL·API 키·모델은 상단 '연결 설정'(접기/펴기)에서 입력하며
 """
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -323,6 +324,8 @@ def render_syllabus_panel() -> None:
             hc[2].download_button("DOC 저장", md_to_doc_bytes(ss.syllabus_md),
                                   file_name=out_name("syllabus") + ".doc",
                                   mime="application/msword", use_container_width=True, key="dl_syl_doc")
+        if ss.syllabus_md:
+            st.caption(f"분량 {len(ss.syllabus_md):,}자")
         if ss.syllabus_md and not pending:
             _chart = bloom_chart_html(bloom_counts(ss.syllabus_md))
             if _chart:
@@ -559,6 +562,12 @@ if ss.step == 3:
                             "PPTX", pptx, file_name=fn + ".pptx",
                             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                             key=f"pptx_{doc_key}", use_container_width=True)
+                # 분량 지표 (대학강의 분량 판별용 · 참고 목표는 잠정)
+                if is_ppt:
+                    n_slides = len(re.findall(r"(?m)^\s*#{2,3}\s*슬라이드", cur))
+                    st.caption(f"슬라이드 {n_slides}장 · {len(cur):,}자  ·  참고 목표 20~30장")
+                else:
+                    st.caption(f"교재 {len(cur):,}자 · 약 {len(cur) / 1800:.1f}쪽(A4)  ·  참고 목표 7쪽↑")
             return st.empty(), st.container()
 
         tab_doc, tab_ppt = st.tabs(["교재", "PPT 개요"])
