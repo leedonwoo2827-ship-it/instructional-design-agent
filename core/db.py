@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "app.db"
+# 기본은 data/app.db. 테스트/개발용으로 IDA_DB_PATH 로 격리 가능(실 DB 보호).
+DB_PATH = Path(os.environ.get("IDA_DB_PATH") or (Path(__file__).resolve().parent.parent / "data" / "app.db"))
 
 # 텍스트/정수 컬럼과 JSON(직렬화) 컬럼 구분
 _TEXT_COLS = ("name", "syllabus_md", "script_doc_md", "script_ppt_md")
