@@ -143,6 +143,9 @@ REFINE_TMPL = (
 
 # 교재/PPT(장문·다수 슬라이드)는 넉넉한 토큰으로 생성(추론 모델 잘림 방지). 설정값보다 크면 그 값 사용.
 GEN_MAX_TOKENS = 16000
+SLIDE_LIST_TOKENS = 3000      # 슬라이드 제목 목록(1단계)
+SLIDE_EXPAND_TOKENS = 24000   # 슬라이드 상세(2단계, 다수 슬라이드)
+SLIDES_PER_HOUR = 20          # 1시간당 슬라이드 수
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +281,8 @@ def script_user_msg(week: int, fmt: str, note: str, syllabus_md: str) -> str:
     vol = ""
     if fmt == "ppt":
         h = session_hours()
-        vol = (f"\n이 차시는 약 {h}시간 수업입니다. 슬라이드는 1시간당 약 15장 기준, "
-               f"표지 제외 본문 약 {h * 15}장으로 작성하세요.")
+        vol = (f"\n이 차시는 약 {h}시간 수업입니다. 슬라이드는 1시간당 약 {SLIDES_PER_HOUR}장 기준, "
+               f"표지 제외 본문 약 {h * SLIDES_PER_HOUR}장으로 작성하세요. 발표자 노트는 넣지 마세요.")
     return (
         f"아래는 확정된 강의계획서입니다. 이 계획서의 {week}주차에 대한 {kind}를 작성해 주세요. "
         f"반드시 계획서의 해당 주차 목표와 강좌 목표(G#)를 상속하세요.{extra}{vol}\n"
@@ -313,17 +316,52 @@ def run_pending(pending: dict, placeholder) -> None:
 
     # script_doc(교재) | script_ppt(PPT 개요)
     is_doc = doc == "script_doc"
-    sys_gen = prompts.SYS_SCRIPT_DOC if is_doc else prompts.SYS_SCRIPT_PPT
     md_key = "script_doc_md" if is_doc else "script_ppt_md"
     msgs_key = "script_doc_msgs" if is_doc else "script_ppt_msgs"
     wk = f"{ss.script_week}주차 " + ("교재" if is_doc else "PPT 개요")
+
+    # ── PPT 생성: 2단계(제목 목록 → 상세)로 슬라이드 개수 보장 ──
+    if (not is_doc) and kind == "gen":
+        n = session_hours() * SLIDES_PER_HOUR
+        provider = llm_mod.build_provider(ss.settings)
+        placeholder.markdown(f"**슬라이드 목록 구성 중…** (목표 {n}장)")
+        list_user = (
+            f"'{ss.script_week}주차' 강의를 정확히 {n}장 슬라이드로 구성합니다. "
+            f"도입(2~3장) · 선수지식(1~2장) · 개념 설명(대부분, 개념마다 정의·예시·비교·적용으로 여러 장 분절) "
+            f"· 사례/활동 · 형성평가(1~2장) · 요약·예고(1~2장) 순서로, "
+            f"슬라이드 {n}개의 '제목'만 1.부터 {n}.까지 번호 목록으로 출력하세요. "
+            f"정확히 {n}줄, 제목 외 다른 말은 쓰지 마세요.\n\n=== 강의계획서 ===\n{ss.syllabus_md}"
+        )
+        try:
+            titles = provider.generate(
+                "너는 슬라이드 제목 목록만 출력한다. 머리말·설명 없이 '1. 제목' 형식 번호 목록만.",
+                [{"role": "user", "content": list_user}],
+                max_tokens=SLIDE_LIST_TOKENS, temperature=0.4)
+        except Exception as e:  # noqa: BLE001
+            print(f"[슬라이드 목록] 오류: {e}", flush=True)
+            titles = ""
+        exp_user = (
+            f"아래 슬라이드 제목 목록({n}장)의 **모든 {n}개** 슬라이드를 각각 상세 개요로 작성하세요. "
+            f"반드시 {n}개의 '### 슬라이드 N — 제목' 블록을 만들고, 각 블록에 "
+            f"- 레이아웃 제안(섹션 표지/2단/콘텐츠) / - 핵심 메시지(1개) / - 본문 개요(불릿 3~5개)를 넣으세요. "
+            f"발표자 노트는 넣지 마세요. 맨 앞에 차시 학습목표와 슬라이드 구성 개요 표도 포함하세요.\n\n"
+            f"[슬라이드 제목 목록]\n{titles}\n\n[강의계획서]\n{ss.syllabus_md}"
+        )
+        msgs = [{"role": "user", "content": exp_user}]
+        full = stream_into(placeholder, prompts.SYS_SCRIPT_PPT, msgs, label=wk, max_tokens=SLIDE_EXPAND_TOKENS)
+        if full:
+            ss[md_key] = full
+            ss[msgs_key] = msgs + [{"role": "assistant", "content": full}]
+        return
+
+    sys_gen = prompts.SYS_SCRIPT_DOC if is_doc else prompts.SYS_SCRIPT_PPT
     if kind == "check":
         cur = ss[md_key]
         msgs = [{"role": "user", "content": f"다음 산출물을 점검해 주세요.\n\n{cur}"}]
         rep = stream_into(placeholder, prompts.SYS_CHECK_SCR, msgs, label=f"{wk} 점검")
         if rep:
             ss[md_key] = cur + f"\n\n---\n\n## 정렬 점검 보고\n\n{rep}"
-    else:  # gen | refine
+    else:  # 교재 gen | refine(교재·PPT)
         full = stream_into(placeholder, sys_gen, ss[msgs_key], label=wk, max_tokens=GEN_MAX_TOKENS)
         if full:
             ss[md_key] = full
@@ -586,7 +624,7 @@ if ss.step == 3:
                 # 분량 지표 (대학강의 분량 판별용 · 참고 목표는 잠정)
                 if is_ppt:
                     n_slides = len(re.findall(r"(?m)^\s*#{2,3}\s*슬라이드", cur))
-                    st.caption(f"슬라이드 {n_slides}장 · {len(cur):,}자  ·  목표 약 {session_hours() * 15}장({session_hours()}시간)")
+                    st.caption(f"슬라이드 {n_slides}장 · {len(cur):,}자  ·  목표 약 {session_hours() * SLIDES_PER_HOUR}장({session_hours()}시간)")
                 else:
                     st.caption(f"교재 {len(cur):,}자 · 약 {len(cur) / 1800:.1f}쪽(A4)  ·  참고 목표 7쪽↑")
             return st.empty(), st.container()

@@ -198,12 +198,7 @@ def outline_to_pptx(md: str, deck_title: str = "강의 슬라이드",
             _fill(cps[1], body[mid:])
         elif cps and body:
             _fill(cps[0], body)
-
-        if notes:
-            try:
-                slide.notes_slide.notes_text_frame.text = "\n".join(notes)
-            except Exception:  # noqa: BLE001
-                pass
+        # 발표자 노트는 넣지 않는다(요청).
 
     buf = io.BytesIO()
     prs.save(buf)
