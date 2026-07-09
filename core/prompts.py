@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """교수설계 시스템 프롬프트 로더.
 
-프롬프트는 코드가 아니라 skills/<name>/SKILL.md 에서 관리한다(전문가 첨삭을 매일
+프롬프트는 코드가 아니라 skills/<name>/SKILL.md 에서 관리한다(첨삭을 매일
 파일 편집만으로 반영). 각 SKILL.md 의 YAML frontmatter 는 벗겨내고 본문만 사용한다.
 import 시 1회 로드되며, 파일을 수정한 뒤 앱을 재시작하면 반영된다.
 

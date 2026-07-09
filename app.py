@@ -410,7 +410,7 @@ def render_syllabus_panel() -> None:
                     ss.syllabus_msgs.append({"role": "user", "content": REFINE_TMPL.format(req=req)})
                     ss._pending = {"kind": "refine", "doc": "syllabus"}
                     st.rerun()
-            with st.expander("직접 편집 (마크다운) — 박사님이 손수 수정"):
+            with st.expander("직접 편집 (마크다운)"):
                 _ed = st.text_area("강의계획서 직접 편집", value=ss.syllabus_md, height=420,
                                    key="edit_syllabus", label_visibility="collapsed")
                 if st.button("편집 저장", key="savedit_syllabus", use_container_width=True):
@@ -672,7 +672,7 @@ if ss.step == 3:
                             if ensure_ready():
                                 ss._pending = {"kind": "check", "doc": doc_key}
                                 st.rerun()
-                        with st.expander("직접 편집 (마크다운) — 박사님이 손수 수정"):
+                        with st.expander("직접 편집 (마크다운)"):
                             _ed = st.text_area("직접 편집", value=ss[md_key], height=380,
                                                key=f"edit_{doc_key}", label_visibility="collapsed")
                             if st.button("편집 저장", key=f"savedit_{doc_key}", use_container_width=True):

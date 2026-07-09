@@ -15,8 +15,8 @@
 로더: [core/prompts.py](../core/prompts.py) 가 위 파일을 읽어 `SYS_BASE`, `SYS_SYLLABUS`, `SYS_SCRIPT_DOC`,
 `SYS_SCRIPT_PPT`, `SYS_CHECK_SYL`, `SYS_CHECK_SCR` 로 조합합니다. **파일을 편집한 뒤 앱을 재시작**하면 반영됩니다.
 
-## 매일 첨삭(전문가 피드백) 반영 방법
-전문가 첨삭이 오면:
+## 매일 첨삭(피드백) 반영 방법
+첨삭이 오면:
 1. 원본 파일은 `_guideline/`(커밋 제외)에 날짜별로 보관.
 2. 해당 문서 스킬(예: 강의계획서 → `syllabus/SKILL.md`)의 본문을 수정하거나, 맨 끝
    **`## 첨삭 반영 규칙 (누적, 날짜순)`** 에 `- (YYYY-MM-DD, 문서) 규칙…` 한 줄을 추가.
