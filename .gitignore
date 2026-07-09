@@ -13,9 +13,11 @@ data/app.db-shm
 *.egg-info/
 *.tmp.*
 
-# 회사 PPT 양식(업로드) — 사내 자료, 커밋 금지
+# 회사 PPT 양식·로고(업로드) — 사내 자료, 커밋 금지
 assets/*.pptx
 assets/*.potx
+assets/*.png
+assets/*.jpg
 
 # 생성 산출물(교재·PPT·강의계획서 등) — 커밋 금지
 _assets/

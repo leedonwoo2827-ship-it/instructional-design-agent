@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 load_dotenv(encoding="utf-8-sig")  # 메모장 저장 .env 의 BOM 허용
 
 from core import db  # noqa: E402
+from core import deck_builder  # noqa: E402
+from core import image_search  # noqa: E402
 from core import llm as llm_mod  # noqa: E402
 from core import prompts  # noqa: E402
 from core import user_settings as settings_mod  # noqa: E402
@@ -28,9 +30,12 @@ from core.viz import (  # noqa: E402
     ICON_DOC, ICON_INFO, ICON_SLIDE, bloom_chart_html, bloom_counts,
 )
 
+PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
 # 회사 PPT 양식(.pptx) — 있으면 PPTX 생성 시 테마·마스터를 상속. (커밋 제외)
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 TEMPLATE_PATH = ASSETS_DIR / "company_template.pptx"
+LOGO_PATH = ASSETS_DIR / "logo.png"
 
 
 def template_arg():
@@ -134,7 +139,8 @@ MODE_CHOICES = ["대면", "온라인(실시간)", "온라인(비동기·동영�
 STEP_META = [
     (1, "강의 정보 입력", "과목 · 대상 · 운영 방식"),
     (2, "강의계획서", "목표–평가–주차 정렬"),
-    (3, "원고", "교재 / PPT 개요"),
+    (3, "교재", "학생용 읽기 자료"),
+    (4, "슬라이드", "개요 → 이미지·레이아웃"),
 ]
 REFINE_TMPL = (
     "다음 요청대로 수정하여, 수정된 문서 전체를 다시 출력해 주세요. "
@@ -165,6 +171,10 @@ ss.setdefault("script_ppt_msgs", [])
 ss.setdefault("ping_status", None)
 ss.setdefault("form", {})
 ss.setdefault("had_key", bool((ss.settings.api_key or "").strip()))
+ss.setdefault("deck_bytes", None)     # ②이미지·레이아웃 정리 결과(.pptx 바이트)
+ss.setdefault("credits_txt", "")      # 이미지 출처 텍스트
+ss.setdefault("deck_name", "")        # 디자인 덱 파일명
+ss.setdefault("img_cache", {})        # 검색어→(bytes,credit) 세션 캐시
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +192,7 @@ def clear_artifacts() -> None:
     ss.syllabus_md, ss.syllabus_msgs = "", []
     ss.script_doc_md, ss.script_ppt_md = "", ""
     ss.script_doc_msgs, ss.script_ppt_msgs = [], []
+    ss.deck_bytes, ss.credits_txt, ss.deck_name = None, "", ""
     ss.script_week, ss.step = 1, 1
 
 
@@ -195,6 +206,7 @@ def load_project_into_session(pid: int) -> None:
     ss.script_week = p["script_week"] or 1
     ss.script_doc_md, ss.script_doc_msgs = p["script_doc_md"], p["script_doc_msgs"]
     ss.script_ppt_md, ss.script_ppt_msgs = p["script_ppt_md"], p["script_ppt_msgs"]
+    ss.deck_bytes, ss.credits_txt, ss.deck_name = None, "", ""
 
 
 def persist() -> None:
@@ -366,6 +378,108 @@ def run_pending(pending: dict, placeholder) -> None:
         if full:
             ss[md_key] = full
             ss[msgs_key].append({"role": "assistant", "content": full})
+
+
+def run_design(status) -> None:
+    """②이미지·레이아웃 정리: 개요(md) → 아트디렉터 플랜 → 이미지 → 디자인 .pptx.
+
+    결과를 ss.deck_bytes / ss.credits_txt / ss.deck_name 에 저장. 실패는 그레이스풀.
+    """
+    outline = ss.script_ppt_md
+    if not outline.strip():
+        st.warning("먼저 ① 슬라이드 개요를 생성하세요.")
+        return
+    provider = llm_mod.build_provider(ss.settings)
+
+    def gen_fn(system, user, mt):
+        return provider.generate(system, [{"role": "user", "content": user}],
+                                 max_tokens=mt, temperature=0.3)
+
+    deck_title = out_name("슬라이드")
+    subtitle = f"{ss.script_week}주차 · {(ss.form.get('title') or '강의').strip()}"
+    status.markdown("**① 슬라이드 구성 분석 중…** (레이아웃·사진 배치 결정)")
+    plan = deck_builder.plan_from_outline(gen_fn, outline, deck_title, subtitle=subtitle)
+
+    queries = deck_builder.image_queries(plan)
+    images = {}
+    if queries:
+        bar = st.progress(0.0, text=f"주제 사진 수집 중… (0/{len(queries)})")
+        for k, (idx, q) in enumerate(queries.items(), 1):
+            data, credit = image_search.fetch(q, cache=ss.img_cache)
+            if data:
+                images[idx] = data
+                plan[idx]["_credit"] = credit
+            bar.progress(k / len(queries), text=f"주제 사진 수집 중… ({k}/{len(queries)})")
+        bar.empty()
+
+    status.markdown("**슬라이드 빌드 중…** (네이비+앰버 레이아웃 적용)")
+    data = deck_builder.build_deck(
+        plan, template_path=template_arg(), images=images, deck_title=deck_title,
+        logo_path=str(LOGO_PATH) if LOGO_PATH.exists() else None)
+    if not data:
+        st.error("슬라이드 빌드 실패(python-pptx 확인).")
+        return
+    entries = [(i + 1, plan[i].get("_credit")) for i in sorted(images.keys())]
+    ss.deck_bytes = data
+    ss.deck_name = deck_title
+    ss.credits_txt = image_search.credits_text(f"{deck_title} — 이미지 출처 (CC 라이선스)", entries)
+    n_pic = len(images)
+    status.markdown(f"**완료** — {len(plan)}장 · 사진 {n_pic}장 삽입. 아래에서 내려받으세요.")
+
+
+def script_downloads(md_key, doc_key, is_ppt):
+    """탭/스텝 상단 다운로드 버튼 → (본문 placeholder, 컨트롤 container) 반환."""
+    cur = ss[md_key]
+    fn = out_name("PPT개요" if is_ppt else "교재")
+    if cur:
+        dc = st.columns([1, 1, 1, 6]) if is_ppt else st.columns([1, 1, 7])
+        dc[0].download_button("MD", cur, file_name=fn + ".md", mime="text/markdown",
+                              key=f"md_{doc_key}", use_container_width=True)
+        dc[1].download_button("DOC", md_to_doc_bytes(cur), file_name=fn + ".doc",
+                              mime="application/msword", key=f"doc_{doc_key}", use_container_width=True)
+        if is_ppt:
+            pptx = outline_to_pptx(cur, deck_title=fn, template_path=template_arg())
+            if pptx:
+                dc[2].download_button("개요 PPTX", pptx, file_name=fn + ".pptx", mime=PPTX_MIME,
+                                      key=f"pptx_{doc_key}", use_container_width=True)
+            n_slides = len(re.findall(r"(?m)^\s*#{2,3}\s*슬라이드", cur))
+            st.caption(f"슬라이드 {n_slides}장 · {len(cur):,}자  ·  목표 약 {session_hours() * SLIDES_PER_HOUR}장({session_hours()}시간)")
+        else:
+            st.caption(f"교재 {len(cur):,}자 · 약 {len(cur) / 1800:.1f}쪽(A4)  ·  참고 목표 7쪽↑")
+    return st.empty(), st.container()
+
+
+def script_idle_body(ph, ctrl, md_key, msgs_key, doc_key, hint):
+    """생성물 표시 + 수정/정렬점검/직접편집 컨트롤(교재·슬라이드 공용)."""
+    if ss[md_key]:
+        ph.markdown(ss[md_key])
+        with ctrl:
+            rc = st.columns([4, 1, 1.3])
+            req = rc[0].text_input("수정", key=f"refine_{doc_key}", label_visibility="collapsed",
+                                   placeholder="수정 요청 — 예: 예시를 더 추가해줘 / 분량을 줄여줘")
+            if rc[1].button("수정", key=f"refbtn_{doc_key}", use_container_width=True):
+                if req.strip() and ensure_ready():
+                    ss[msgs_key].append({"role": "user", "content": REFINE_TMPL.format(req=req)})
+                    ss._pending = {"kind": "refine", "doc": doc_key}
+                    st.rerun()
+            if rc[2].button("정렬 점검", key=f"chk_{doc_key}", use_container_width=True):
+                if ensure_ready():
+                    ss._pending = {"kind": "check", "doc": doc_key}
+                    st.rerun()
+            with st.expander("직접 편집 (마크다운)"):
+                _ed = st.text_area("직접 편집", value=ss[md_key], height=380,
+                                   key=f"edit_{doc_key}", label_visibility="collapsed")
+                if st.button("편집 저장", key=f"savedit_{doc_key}", use_container_width=True):
+                    ss[md_key] = _ed
+                    ss[msgs_key] = [
+                        {"role": "user", "content": "현재 문서(직접 편집본)를 기준으로 이어서 작업합니다."},
+                        {"role": "assistant", "content": _ed},
+                    ]
+                    persist()
+                    st.success("편집 내용을 저장했습니다.")
+                    st.rerun()
+    else:
+        ph.info(hint)
 
 
 def render_syllabus_panel() -> None:
@@ -544,7 +658,7 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # STEP 바
 # ---------------------------------------------------------------------------
-sb = st.columns(3)
+sb = st.columns(len(STEP_META))
 for idx, (n, tit, desc) in enumerate(STEP_META):
     with sb[idx]:
         active = ss.step == n
@@ -562,130 +676,124 @@ if "_pending" in ss:
 st.write("")
 
 # ===========================================================================
-# STEP 3 — 전체 폭: 상단 컨트롤 + 교재/PPT 탭 (PPTX 버튼이 상단에서 바로 보임)
+# STEP 3 — 교재(학생용 읽기 자료)
 # ===========================================================================
 if ss.step == 3:
     with st.container(border=True):
-        st.markdown(f'<div class="ida-panel-title">{ICON_SLIDE}산출물 생성 · STEP 3</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="ida-panel-title">{ICON_DOC}교재 생성 · STEP 3</div>', unsafe_allow_html=True)
         if not ss.syllabus_md:
-            st.info("산출물은 강의계획서의 주차 목표를 상속합니다. 먼저 STEP 1~2에서 강의계획서를 생성하세요.")
+            st.info("교재는 강의계획서의 주차 목표를 상속합니다. 먼저 STEP 1~2에서 강의계획서를 생성하세요.")
         else:
-            st.caption("선택한 주차에 대해 **학생용 교재**와 **PPT 개요**를 함께 생성합니다. 아래 탭에서 각각 확인·수정·점검·저장하세요.")
+            st.caption("선택한 주차의 **학생용 교재(읽기 자료)** 를 생성합니다. 슬라이드는 STEP 4에서 만듭니다.")
             n_weeks = int(ss.form.get("weeks", 15))
             week_opts = list(range(1, n_weeks + 1))
             cc = st.columns([1.3, 3.4, 1.9])
             ss.script_week = cc[0].selectbox("대상 주차", week_opts,
                                              index=week_opts.index(ss.script_week)
                                              if ss.script_week in week_opts else 0,
-                                             format_func=lambda w: f"{w}주차")
-            note = cc[1].text_input("해당 차시 요청사항 (선택)", key="script_note",
-                                    placeholder="예: 사례 중심으로, 조별 토론 20분 포함, 동영상 강의용 등")
+                                             format_func=lambda w: f"{w}주차", key="wk_doc")
+            note = cc[1].text_input("해당 차시 요청사항 (선택)", key="note_doc",
+                                    placeholder="예: 사례 중심으로, 표·그림 제안 포함 등")
             cc[2].markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if cc[2].button("교재 + PPT 개요 생성 →", type="primary", use_container_width=True):
+            if cc[2].button("교재 생성 →", type="primary", use_container_width=True,
+                            disabled=bool(pending)):
                 if ensure_ready():
                     ss.script_doc_msgs = [{"role": "user",
                                            "content": script_user_msg(ss.script_week, "doc", note, ss.syllabus_md)}]
+                    ss._pending = {"kind": "gen", "doc": "script_doc"}
+                    st.rerun()
+            if st.button("슬라이드 만들기 (STEP 4) →", key="goto4", use_container_width=True):
+                ss.step = 4
+                st.rerun()
+
+    if ss.syllabus_md:
+        doc_ph, doc_ctrl = script_downloads("script_doc_md", "script_doc", False)
+        if pending and pending.get("doc") == "script_doc":
+            _m = {"gen": "교재 작성 중…", "refine": "수정 반영 중…",
+                  "check": "정렬 점검 중…"}.get(pending["kind"], "작성 중…")
+            with st.spinner(_m):
+                run_pending(pending, doc_ph)
+            persist()
+            st.rerun()
+        else:
+            script_idle_body(doc_ph, doc_ctrl, "script_doc_md", "script_doc_msgs", "script_doc",
+                             "위 '교재 생성'을 누르면 교재가 여기에 표시됩니다.")
+
+# ===========================================================================
+# STEP 4 — 슬라이드(개요 → 이미지·레이아웃 정리)
+# ===========================================================================
+elif ss.step == 4:
+    with st.container(border=True):
+        st.markdown(f'<div class="ida-panel-title">{ICON_SLIDE}슬라이드 생성 · STEP 4</div>', unsafe_allow_html=True)
+        if not ss.syllabus_md:
+            st.info("슬라이드는 강의계획서의 주차 목표를 상속합니다. 먼저 STEP 1~2에서 강의계획서를 생성하세요.")
+        else:
+            st.caption("① 슬라이드 개요를 생성한 뒤 ② **이미지·레이아웃 정리**로 사진·도식이 배치된 디자인 .pptx 를 만듭니다.")
+            n_weeks = int(ss.form.get("weeks", 15))
+            week_opts = list(range(1, n_weeks + 1))
+            cc = st.columns([1.3, 3.4, 1.9])
+            ss.script_week = cc[0].selectbox("대상 주차", week_opts,
+                                             index=week_opts.index(ss.script_week)
+                                             if ss.script_week in week_opts else 0,
+                                             format_func=lambda w: f"{w}주차", key="wk_ppt")
+            note = cc[1].text_input("해당 차시 요청사항 (선택)", key="note_ppt",
+                                    placeholder="예: 오리엔테이션 최소화, 개념마다 예시 등")
+            cc[2].markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            if cc[2].button("① 슬라이드 개요 생성 →", type="primary", use_container_width=True,
+                            disabled=bool(pending)):
+                if ensure_ready():
                     ss.script_ppt_msgs = [{"role": "user",
                                            "content": script_user_msg(ss.script_week, "ppt", note, ss.syllabus_md)}]
-                    ss._pending = {"kind": "gen_both", "doc": "script"}
+                    ss._pending = {"kind": "gen", "doc": "script_ppt"}
                     st.rerun()
+
+            _has_outline = bool(ss.script_ppt_md.strip())
+            bc = st.columns([2.6, 2.2, 2.2, 2.0])
+            if bc[0].button("② 이미지·레이아웃 정리 (디자인 PPT)",
+                            type="primary" if _has_outline else "secondary",
+                            disabled=(not _has_outline) or bool(pending), use_container_width=True):
+                if ensure_ready():
+                    ss._pending = {"kind": "design", "doc": "script_ppt"}
+                    st.rerun()
+            if ss.deck_bytes:
+                bc[1].download_button("⬇ 디자인 PPTX", ss.deck_bytes,
+                                      file_name=(ss.deck_name or out_name("슬라이드")) + ".pptx",
+                                      mime=PPTX_MIME, key="dl_deck", use_container_width=True)
+                bc[2].download_button("⬇ 이미지 출처(.txt)", ss.credits_txt.encode("utf-8"),
+                                      file_name=(ss.deck_name or "슬라이드") + "_이미지출처.txt",
+                                      mime="text/plain", key="dl_credits", use_container_width=True)
 
             _tpl_on = TEMPLATE_PATH.exists()
             with st.expander(f"PPT 회사 양식(.pptx) — {'적용됨 ✓' if _tpl_on else '기본 양식 사용 중'}"):
-                st.caption("회사 양식 .pptx 를 올리면 PPTX 저장 시 그 테마·마스터·폰트·레이아웃을 상속합니다. "
-                           "(Anthropic pptx 스킬의 템플릿 기반 방식) 양식 파일은 로컬 assets/ 에만 저장되고 GitHub 에 올라가지 않습니다.")
+                st.caption("회사 양식 .pptx 를 올리면 디자인 슬라이드가 그 마스터·로고를 상속합니다. "
+                           "로고는 양식의 **슬라이드 마스터**에 넣어두면 전 슬라이드에 표시됩니다. "
+                           "(또는 assets/logo.png 를 두면 우상단 자동 삽입) 양식 파일은 로컬 assets/ 에만 저장됩니다.")
                 up = st.file_uploader("회사 양식 업로드 (.pptx / .potx)", type=["pptx", "potx"], key="tpl_up")
                 if up is not None:
                     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
                     TEMPLATE_PATH.write_bytes(up.getvalue())
-                    st.success("회사 양식이 적용되었습니다. 이후 생성/저장되는 PPTX 에 반영됩니다.")
+                    st.success("회사 양식이 적용되었습니다.")
                 if _tpl_on and st.button("양식 제거(기본으로 되돌리기)", key="tpl_rm"):
                     TEMPLATE_PATH.unlink(missing_ok=True)
                     st.rerun()
 
     if ss.syllabus_md:
-        def render_script_tab(md_key, doc_key, is_ppt):
-            """탭 내부: 상단 다운로드 버튼 → 본문/컨트롤용 placeholder 반환."""
-            cur = ss[md_key]
-            fn = out_name("PPT개요" if is_ppt else "교재")
-            if cur:
-                dc = st.columns([1, 1, 1, 6]) if is_ppt else st.columns([1, 1, 7])
-                dc[0].download_button("MD", cur, file_name=fn + ".md", mime="text/markdown",
-                                      key=f"md_{doc_key}", use_container_width=True)
-                dc[1].download_button("DOC", md_to_doc_bytes(cur), file_name=fn + ".doc",
-                                      mime="application/msword", key=f"doc_{doc_key}", use_container_width=True)
-                if is_ppt:
-                    pptx = outline_to_pptx(cur, deck_title=fn, template_path=template_arg())
-                    if pptx:
-                        dc[2].download_button(
-                            "PPTX", pptx, file_name=fn + ".pptx",
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                            key=f"pptx_{doc_key}", use_container_width=True)
-                # 분량 지표 (대학강의 분량 판별용 · 참고 목표는 잠정)
-                if is_ppt:
-                    n_slides = len(re.findall(r"(?m)^\s*#{2,3}\s*슬라이드", cur))
-                    st.caption(f"슬라이드 {n_slides}장 · {len(cur):,}자  ·  목표 약 {session_hours() * SLIDES_PER_HOUR}장({session_hours()}시간)")
-                else:
-                    st.caption(f"교재 {len(cur):,}자 · 약 {len(cur) / 1800:.1f}쪽(A4)  ·  참고 목표 7쪽↑")
-            return st.empty(), st.container()
-
-        tab_doc, tab_ppt = st.tabs(["교재", "PPT 개요"])
-        with tab_doc:
-            doc_ph, doc_ctrl = render_script_tab("script_doc_md", "script_doc", False)
-        with tab_ppt:
-            ppt_ph, ppt_ctrl = render_script_tab("script_ppt_md", "script_ppt", True)
-
-        pdoc = pending.get("doc") if pending else None
-        if pending and pending["kind"] == "gen_both":
-            with st.spinner(f"{ss.script_week}주차 교재 작성 중…"):
-                run_pending({"kind": "gen", "doc": "script_doc"}, doc_ph)
-            with st.spinner(f"{ss.script_week}주차 PPT 개요 작성 중…"):
-                run_pending({"kind": "gen", "doc": "script_ppt"}, ppt_ph)
-            persist()
+        ppt_ph, ppt_ctrl = script_downloads("script_ppt_md", "script_ppt", True)
+        if pending and pending.get("kind") == "design":
+            status = st.empty()
+            with st.spinner("이미지·레이아웃 정리 중… (구성 분석 → 사진 수집 → 빌드)"):
+                run_design(status)
             st.rerun()
-        elif pending and pdoc in ("script_doc", "script_ppt"):
-            tph = doc_ph if pdoc == "script_doc" else ppt_ph
-            _m = {"refine": "수정 반영 중…", "check": "정렬 점검 중…"}.get(pending["kind"], "작성 중…")
+        elif pending and pending.get("doc") == "script_ppt":
+            _m = {"gen": "슬라이드 개요 작성 중…", "refine": "수정 반영 중…",
+                  "check": "정렬 점검 중…"}.get(pending["kind"], "작성 중…")
             with st.spinner(_m):
-                run_pending(pending, tph)
+                run_pending(pending, ppt_ph)
             persist()
             st.rerun()
         else:
-            for ph, ctrl, md_key, msgs_key, doc_key, hint in [
-                (doc_ph, doc_ctrl, "script_doc_md", "script_doc_msgs", "script_doc",
-                 "위 '교재 + PPT 개요 생성'을 누르면 교재가 여기에 표시됩니다."),
-                (ppt_ph, ppt_ctrl, "script_ppt_md", "script_ppt_msgs", "script_ppt",
-                 "PPT 개요가 여기에 표시됩니다. (MD·DOC·PPTX 저장 지원)"),
-            ]:
-                if ss[md_key]:
-                    ph.markdown(ss[md_key])
-                    with ctrl:
-                        rc = st.columns([4, 1, 1.3])
-                        req = rc[0].text_input("수정", key=f"refine_{doc_key}", label_visibility="collapsed",
-                                               placeholder="수정 요청 — 예: 예시를 더 추가해줘 / 분량을 줄여줘")
-                        if rc[1].button("수정", key=f"refbtn_{doc_key}", use_container_width=True):
-                            if req.strip() and ensure_ready():
-                                ss[msgs_key].append({"role": "user", "content": REFINE_TMPL.format(req=req)})
-                                ss._pending = {"kind": "refine", "doc": doc_key}
-                                st.rerun()
-                        if rc[2].button("정렬 점검", key=f"chk_{doc_key}", use_container_width=True):
-                            if ensure_ready():
-                                ss._pending = {"kind": "check", "doc": doc_key}
-                                st.rerun()
-                        with st.expander("직접 편집 (마크다운)"):
-                            _ed = st.text_area("직접 편집", value=ss[md_key], height=380,
-                                               key=f"edit_{doc_key}", label_visibility="collapsed")
-                            if st.button("편집 저장", key=f"savedit_{doc_key}", use_container_width=True):
-                                ss[md_key] = _ed
-                                ss[msgs_key] = [
-                                    {"role": "user", "content": "현재 문서(직접 편집본)를 기준으로 이어서 작업합니다."},
-                                    {"role": "assistant", "content": _ed},
-                                ]
-                                persist()
-                                st.success("편집 내용을 저장했습니다.")
-                                st.rerun()
-                else:
-                    ph.info(hint)
+            script_idle_body(ppt_ph, ppt_ctrl, "script_ppt_md", "script_ppt_msgs", "script_ppt",
+                             "위 '① 슬라이드 개요 생성'을 누르면 개요가 여기에 표시됩니다.")
 
 # ===========================================================================
 # STEP 1 — 강의계획서 전체 폭 (입력은 사이드바)
@@ -711,7 +819,7 @@ else:
                 st.rerun()
             elif not ss.syllabus_md:
                 st.warning("먼저 강의계획서를 생성하세요.")
-        if bc[1].button("② 산출물(교재·PPT) 작성으로 이동 →", use_container_width=True,
+        if bc[1].button("② 교재·슬라이드 작성으로 이동 →", use_container_width=True,
                         type=("primary" if _checked else "secondary"),
                         disabled=_busy or not ss.syllabus_md):
             ss.step = 3

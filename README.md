@@ -20,7 +20,7 @@ macOS / Linux: `./setup.sh` 후 `./run.sh`.
 
 ## 화면 구성
 - **좌측 사이드바**: 강의 프로젝트(새로 만들기/열기/이름변경/삭제) · **강의 기본 정보**(입력 폼) · **연결 설정**(URL·키·모델)
-- **메인**: 상단 STEP 바(1·2·3) + 산출물 패널
+- **메인**: 상단 STEP 바(1·2·3·4) + 산출물 패널
 
 ## 사용 흐름
 | 단계 | 내용 |
@@ -28,11 +28,14 @@ macOS / Linux: `./setup.sh` 후 `./run.sh`.
 | **STEP 1 · 강의 정보** | 사이드바에 과목·대상·주차·방식·주제 입력 → **강의계획서** 생성(스트리밍) |
 | **STEP 2 · 강의계획서** | 실무형 강의계획서 확인·수정·**직접 편집**. 아래 두 버튼: |
 | | ① **정렬 점검 실행** — 생성물이 실무형 기준(섹션 구성·학습목표 3~4개·평가/출석 규정·주교재 서지·주별·과제)을 지키는지 **AI가 감사**해 ✅/⚠️/❌ 수정 제안을 문서 하단에 덧붙임 *(맞춤법 교정 아님)* |
-| | ② **산출물 작성으로 이동** — STEP 3로 이동. 점검을 먼저 하도록 ①이 강조되고, 점검 후 ②가 강조됨 |
-| **STEP 3 · 원고** | 주차 선택 → **교재 + PPT 개요 동시 생성**. 탭별 확인·수정·점검·저장 |
+| | ② **교재·슬라이드 작성으로 이동** — STEP 3로 이동. 점검을 먼저 하도록 ①이 강조되고, 점검 후 ②가 강조됨 |
+| **STEP 3 · 교재** | 주차 선택 → **학생용 교재(읽기 자료)** 생성. 확인·수정·점검·직접 편집·저장 |
+| **STEP 4 · 슬라이드** | ① **슬라이드 개요 생성**(2단계: 제목 목록 → 상세, 시간당 20장) → ② **이미지·레이아웃 정리** = 개요를 **디자인된 `.pptx`** 로 자동 변환 |
+| | ②는 AI가 슬라이드별 레이아웃(사진/프로세스·카드 도식/비교/불릿)을 정하고, **Openverse 무료 CC 사진**을 주제별로 넣어, 네이비+앰버 스타일(제목·요약칩·▸불릿)로 빌드합니다. **디자인 PPTX + 이미지 출처(.txt)** 를 내려받습니다. |
 
-- 각 산출물은 `.md` / `.doc`(한글·워드) 저장, PPT 개요는 **`.pptx`** 저장(회사 양식 상속) 지원.
-- 강의계획서·교재·PPT 모두 **직접 편집(마크다운)** 가능 — 편집본 기준으로 이후 AI 수정이 이어집니다.
+- 각 산출물은 `.md` / `.doc`(한글·워드) 저장, 슬라이드는 **개요 PPTX**(회사 양식 placeholder)와 **디자인 PPTX**(사진·도식 배치) 두 가지 지원.
+- 강의계획서·교재·슬라이드 개요 모두 **직접 편집(마크다운)** 가능 — 편집본 기준으로 이후 AI 수정·디자인이 이어집니다.
+- 디자인 슬라이드의 **로고**는 회사 양식(`assets/company_template.pptx`)의 **슬라이드 마스터**에 넣어두면 전 슬라이드에 상속됩니다(또는 `assets/logo.png` 를 두면 우상단 자동 삽입).
 
 ## 모델
 사이드바 연결 설정에서 선택 (기본 **`deepseek-v4-flash-think`**):
@@ -47,15 +50,17 @@ macOS / Linux: `./setup.sh` 후 `./run.sh`.
 
 ## 구조
 ```
-app.py                 Streamlit UI (사이드바 입력 · STEP 1·2·3)
+app.py                 Streamlit UI (사이드바 입력 · STEP 1·2·3·4)
 core/prompts.py        skills/*.md 로더 → 시스템 프롬프트 조합
 core/llm.py            LiteLLM 프록시 호출 (openai SDK, 스트리밍)
 core/user_settings.py  설정 저장/로드 (data/user_settings.json, .env 기본값)
 core/db.py             프로젝트(강의) 저장 SQLite (data/app.db)
 core/viz.py            라인 아이콘 + Bloom 인지수준 SVG 차트
-core/pptx_export.py    PPT 개요 → .pptx (회사 양식 상속)
+core/pptx_export.py    슬라이드 개요 → 개요 .pptx (회사 양식 placeholder 상속)
+core/deck_builder.py   개요 → 디자인 .pptx (아트디렉터 LLM 패스 + 사진·도식·레이아웃 렌더)
+core/image_search.py   Openverse 무료 CC 이미지 검색·다운로드 + 출처 수집
 skills/                교수설계 프롬프트(SKILL.md) — 첨삭 반영 지점
-assets/company_template.pptx  회사 PPT 양식(선택, 로컬)
+assets/company_template.pptx  회사 PPT 양식(선택, 로컬) · assets/logo.png(선택)
 setup.bat / run.bat    Windows 설치·실행 (setup.sh / run.sh: mac·linux)
 ```
 

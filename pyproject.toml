@@ -9,6 +9,8 @@ dependencies = [
   "python-dotenv>=1.0",
   "markdown>=3.6",
   "python-pptx>=0.6",
+  "requests>=2.31",
+  "pillow>=10",
 ]
 
 [build-system]
