@@ -631,8 +631,7 @@ elif ss.step == 1:
 else:
     with st.container(border=True):
         st.markdown(f'<div class="ida-panel-title">{ICON_INFO}강의계획서 점검 · STEP 2</div>', unsafe_allow_html=True)
-        st.caption("‘정렬 점검’은 생성된 강의계획서가 실무형 기준(섹션 구성·학습목표 3~4개·평가/출석 규정·주교재 서지·주별·과제)을 "
-                   "지키는지 AI가 감사해 ✅/⚠️/❌ 수정 제안을 문서 하단에 덧붙입니다. (맞춤법 교정이 아니라 구성·정렬 검토)")
+        st.caption("① 정렬 점검: 강의계획서가 실무형 기준을 지켰는지 AI가 검토해 수정 제안을 문서 하단에 덧붙입니다.")
         _checked = "정렬 점검 보고" in (ss.syllabus_md or "")  # 점검 완료 시 강조를 ②로 이동
         bc = st.columns([1.8, 2.6, 3.2])
         if bc[0].button("① 정렬 점검 실행", use_container_width=True,
