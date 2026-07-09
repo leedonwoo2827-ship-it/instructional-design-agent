@@ -64,6 +64,30 @@ def _body_placeholder(slide):
     return None
 
 
+def _content_phs(slide):
+    """제목(idx 0) 이외의 텍스트 플레이스홀더들을 idx 순으로 반환(2단 배치용)."""
+    out = []
+    for ph in slide.placeholders:
+        try:
+            if ph.placeholder_format.idx != 0 and ph.has_text_frame:
+                out.append(ph)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+def _fill(ph, lines):
+    """플레이스홀더 텍스트프레임에 여러 줄 채우기(첫 줄 굵게)."""
+    tf = ph.text_frame
+    tf.clear()
+    tf.word_wrap = True
+    for i, line in enumerate(lines[:10]):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.text = line[:220]
+        if i == 0:
+            p.font.bold = True
+
+
 def outline_to_pptx(md: str, deck_title: str = "강의 슬라이드",
                     template_path: Optional[str] = None) -> Optional[bytes]:
     """개요 마크다운 → .pptx 바이트. python-pptx 미설치 시 None."""
@@ -91,6 +115,7 @@ def outline_to_pptx(md: str, deck_title: str = "강의 슬라이드",
     title_layout = _find_layout(prs, ["title slide", "제목 슬라이드", "표지", "cover"], 0)
     body_layout = _find_layout(prs, ["title and content", "제목 및 내용", "content", "내용", "본문"], 1)
     section_layout = _find_layout(prs, ["section header", "구역 머리글", "섹션", "구역"], 2)
+    two_layout = _find_layout(prs, ["콘텐츠 2개", "두 개의 콘텐츠", "two content", "comparison", "비교", "2개"], 3)
 
     # ── 표지 ──
     s = prs.slides.add_slide(title_layout)
@@ -151,17 +176,29 @@ def outline_to_pptx(md: str, deck_title: str = "강의 슬라이드",
                 continue
             (notes if mode == "notes" else body).append(_clean(t))
 
-        is_section = bool(layout_hint) and ("섹션" in layout_hint or "표지" in layout_hint)
-        slide = prs.slides.add_slide(section_layout if is_section else body_layout)
+        hint = layout_hint
+        is_section = bool(hint) and ("섹션" in hint or "표지" in hint)
+        is_two = any(k in hint for k in ["2단", "두 단", "2 단", "two", "2x2", "2X2", "그리드", "grid", "비교", "콘텐츠 2"])
+
+        if is_section:
+            layout = section_layout
+        elif is_two:
+            layout = two_layout
+        else:
+            layout = body_layout
+        slide = prs.slides.add_slide(layout)
         if slide.shapes.title is not None:
             slide.shapes.title.text = title[:120]
-        bph = _body_placeholder(slide)
-        if bph is not None and body:
-            tf = bph.text_frame
-            tf.clear()
-            for i, line in enumerate(body[:12]):
-                p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-                p.text = line[:200]
+
+        cps = _content_phs(slide)
+        if is_two and len(cps) >= 2 and len(body) >= 2:
+            # 본문을 좌/우 두 칸에 나눠 배치
+            mid = (len(body) + 1) // 2
+            _fill(cps[0], body[:mid])
+            _fill(cps[1], body[mid:])
+        elif cps and body:
+            _fill(cps[0], body)
+
         if notes:
             try:
                 slide.notes_slide.notes_text_frame.text = "\n".join(notes)
