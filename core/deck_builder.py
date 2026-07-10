@@ -186,7 +186,7 @@ def add_chip(slide, text, y=1.55, w=CONTENT_W):
     return y + h
 
 
-def _hang(p, marL_in=0.28):
+def _hang(p, marL_in=0.23):
     """문단에 내어쓰기(hanging indent): ▸는 왼쪽으로 튀고 줄바꿈 글자는 텍스트 아래 정렬."""
     emu = str(int(marL_in * 914400))
     pPr = p._p.get_or_add_pPr()
@@ -525,59 +525,84 @@ def _extract_json_array(text: str):
     return objs or None
 
 
+def _outline_blocks(outline_md: str) -> List[str]:
+    """개요 md 를 '### 슬라이드 …' 단위 블록 리스트로 분할."""
+    parts = re.split(r"(?m)^(?=#{2,3}\s*슬라이드)", outline_md or "")
+    return [p.strip() for p in parts if re.match(r"#{2,3}\s*슬라이드", p.strip())]
+
+
+def _block_to_bullets(block: str) -> Dict:
+    """개요 블록 하나 → bullets 슬라이드 dict(아트디렉터 실패 시 폴백)."""
+    lines = [l.strip() for l in block.splitlines() if l.strip()]
+    title = re.sub(r"^#{2,3}\s*", "", lines[0]) if lines else "슬라이드"
+    title = re.sub(r"^슬라이드\s*\d+\s*[—\-:：]\s*", "", title).strip()
+    chip, bullets = "", []
+    for ln in lines[1:]:
+        m = re.match(r"^[-*+]?\s*\*{0,2}([^*:：]{1,20})\*{0,2}\s*[:：]\s*(.*)$", ln)
+        if m and "핵심" in m.group(1):
+            chip = m.group(2).strip()
+        elif m and "레이아웃" in m.group(1):
+            continue
+        else:
+            v = re.sub(r"^[-*+•·]\s*", "", ln)
+            if v and not re.match(r"^\**본문", v):
+                bullets.append(v)
+    return {"type": "bullets", "title": title, "chip": chip, "bullets": bullets[:5]}
+
+
 def _fallback_plan(outline_md: str, deck_title: str) -> List[Dict]:
     """개요 md 를 단순 파싱해 bullets 위주 플랜으로(아트디렉터 실패 시)."""
     plan = [{"type": "cover", "title": deck_title, "chip": ""}]
-    blocks = re.split(r"(?m)^\s*#{2,3}\s+", outline_md or "")
-    for b in blocks:
-        if not re.match(r"\s*슬라이드", b):
-            continue
-        lines = [l.strip() for l in b.splitlines() if l.strip()]
-        if not lines:
-            continue
-        title = re.sub(r"^슬라이드\s*\d+\s*[—\-:：]\s*", "", lines[0]).strip()
-        chip, bullets = "", []
-        for ln in lines[1:]:
-            m = re.match(r"^[-*+]?\s*\*{0,2}([^*:：]{1,20})\*{0,2}\s*[:：]\s*(.*)$", ln)
-            if m and "핵심" in m.group(1):
-                chip = m.group(2).strip()
-            elif m and "레이아웃" in m.group(1):
-                continue
-            else:
-                v = re.sub(r"^[-*+•·]\s*", "", ln)
-                if v and not re.match(r"^\**본문", v):
-                    bullets.append(v)
-        plan.append({"type": "bullets", "title": title, "chip": chip, "bullets": bullets[:5]})
+    plan += [_block_to_bullets(b) for b in _outline_blocks(outline_md)]
     return plan
+
+
+def _normalize_slide(s: Dict) -> Optional[Dict]:
+    if not isinstance(s, dict):
+        return None
+    s.setdefault("type", "bullets")
+    s.setdefault("title", "")
+    s.setdefault("bullets", [])
+    if s["type"] == "cover":   # LLM이 표지를 만들면 내용형으로 강등
+        s["type"] = "bullets"
+    return s
+
+
+_CHUNK = 14  # 청크당 슬라이드 수(토큰 잘림 방지)
 
 
 def plan_from_outline(generate_fn: Callable[[str, str, int], str],
                       outline_md: str, deck_title: str,
                       subtitle: str = "") -> List[Dict]:
-    """generate_fn(system, user, max_tokens)->str 로 개요를 슬라이드플랜으로 변환.
+    """개요를 슬라이드플랜으로 변환. 개요를 청크로 나눠 변환해 개수 잘림을 막는다.
 
-    실패/파싱 오류 시 _fallback_plan 으로 안전 복구(항상 리스트 반환).
-    표지(cover)는 LLM이 아니라 여기서 맨 앞에 자동 추가한다.
+    표지(cover)는 LLM이 아니라 여기서 맨 앞에 자동 추가한다. 청크가 실패하면
+    그 청크만 블록 파싱(bullets)으로 폴백 → 전체 슬라이드 수는 항상 보존.
     """
-    user = f"{_ART_RULES}\n\n[덱 제목]\n{deck_title}\n\n[슬라이드 개요]\n{outline_md}"
-    try:
-        raw = generate_fn(_ART_SYS, user, 14000)
-    except Exception as e:  # noqa: BLE001
-        print(f"[art] 생성 오류: {e}", flush=True)
-        raw = ""
-    plan = _extract_json_array(raw)
-    if not isinstance(plan, list) or not plan:
+    blocks = _outline_blocks(outline_md)
+    if not blocks:
         return _fallback_plan(outline_md, deck_title)
-    out = []
-    for s in plan:
-        if not isinstance(s, dict):
-            continue
-        s.setdefault("type", "bullets")
-        s.setdefault("title", "")
-        s.setdefault("bullets", [])
-        if s["type"] == "cover":   # LLM이 표지를 만들면 내용형으로 강등
-            s["type"] = "bullets"
-        out.append(s)
+
+    chunks = [blocks[i:i + _CHUNK] for i in range(0, len(blocks), _CHUNK)]
+    out: List[Dict] = []
+    for ci, ch in enumerate(chunks):
+        chunk_md = "\n\n".join(ch)
+        user = (f"{_ART_RULES}\n\n[덱 제목]\n{deck_title}\n"
+                f"[부분 {ci + 1}/{len(chunks)} · 이 부분의 슬라이드 {len(ch)}개를 빠짐없이 변환]\n\n"
+                f"[슬라이드 개요]\n{chunk_md}")
+        try:
+            raw = generate_fn(_ART_SYS, user, 12000)
+        except Exception as e:  # noqa: BLE001
+            print(f"[art] 청크 {ci + 1} 생성 오류: {e}", flush=True)
+            raw = ""
+        arr = _extract_json_array(raw)
+        got = [x for x in (_normalize_slide(s) for s in arr) if x] if isinstance(arr, list) else []
+        # 개수가 모자라면 부족분을 블록 파싱으로 보충(개수 보존)
+        if len(got) < len(ch):
+            print(f"[art] 청크 {ci + 1}: {len(got)}/{len(ch)} → 부족분 블록 폴백", flush=True)
+            got += [_block_to_bullets(b) for b in ch[len(got):]]
+        out += got[:len(ch)]
+
     out.insert(0, {"type": "cover", "title": deck_title, "chip": subtitle})
     return out
 
