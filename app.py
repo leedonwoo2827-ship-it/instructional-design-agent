@@ -408,8 +408,9 @@ def run_design(status) -> None:
     images = {}
     if queries:
         bar = st.progress(0.0, text=f"주제 사진 수집 중… (0/{len(queries)})")
+        _ukey = (ss.settings.unsplash_key or "").strip()
         for k, (idx, q) in enumerate(queries.items(), 1):
-            data, credit = image_search.fetch(q, cache=ss.img_cache)
+            data, credit = image_search.fetch(q, cache=ss.img_cache, unsplash_key=_ukey)
             if data:
                 images[idx] = data
                 plan[idx]["_credit"] = credit
@@ -633,6 +634,10 @@ with st.sidebar:
         _cur = settings_mod.MODELS.get(s.model, s.model)
         st.markdown(f"**사용 모델** · {_cur}")
         st.caption(f"디자인 슬라이드(②)는 형식 안정성을 위해 비추론 모델({s.model.replace('-think', '')})을 자동 사용합니다.")
+        s.unsplash_key = st.text_input("Unsplash Access Key (선택)", value=s.unsplash_key,
+                                       type="password",
+                                       help="넣으면 디자인 슬라이드 사진을 Unsplash(고품질)에서 가져옵니다. "
+                                            "비우면 Openverse(무료 CC)로 동작. unsplash.com/developers 에서 무료 발급.")
         bc1, bc2 = st.columns(2)
         if bc1.button("연결 테스트", use_container_width=True):
             with st.spinner("확인 중…"):

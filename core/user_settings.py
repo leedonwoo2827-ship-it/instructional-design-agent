@@ -37,6 +37,8 @@ class Settings:
     # 강의계획서/원고는 표가 많은 장문이라 넉넉히
     max_tokens: int = 10000
     temperature: float = 0.7
+    # 디자인 슬라이드 사진용(선택). 있으면 Unsplash, 없으면 Openverse.
+    unsplash_key: str = ""
 
 
 def _env_defaults() -> Settings:
@@ -44,6 +46,7 @@ def _env_defaults() -> Settings:
     s.base_url = os.environ.get("UBION_LITELLM_URL", s.base_url)
     s.api_key = os.environ.get("UBION_LITELLM_KEY", s.api_key)
     s.model = os.environ.get("UBION_LITELLM_MODEL", s.model)
+    s.unsplash_key = os.environ.get("UNSPLASH_ACCESS_KEY", s.unsplash_key)
     return s
 
 
