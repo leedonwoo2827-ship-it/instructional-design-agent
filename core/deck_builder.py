@@ -186,12 +186,21 @@ def add_chip(slide, text, y=1.55, w=CONTENT_W):
     return y + h
 
 
+def _hang(p, marL_in=0.28):
+    """문단에 내어쓰기(hanging indent): ▸는 왼쪽으로 튀고 줄바꿈 글자는 텍스트 아래 정렬."""
+    emu = str(int(marL_in * 914400))
+    pPr = p._p.get_or_add_pPr()
+    pPr.set("marL", emu)
+    pPr.set("indent", "-" + emu)
+
+
 def add_bullets(slide, bullets, x, y, w, h, size=15):
     if not bullets:
         return
     tf = _text(slide, x, y, w, h, anchor="t")
     for i, b in enumerate(bullets):
         p = _para(tf, i == 0, space_after=8, line=1.15)
+        _hang(p)
         _run(p, "▸ ", size, "amber", bold=True)
         _run(p, str(b), size, "grey", bold=False)
 
