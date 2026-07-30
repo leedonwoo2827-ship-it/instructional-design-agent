@@ -176,6 +176,7 @@ ss.setdefault("deck_bytes", None)     # ②이미지·레이아웃 정리 결과
 ss.setdefault("credits_txt", "")      # 이미지 출처 텍스트
 ss.setdefault("deck_name", "")        # 디자인 덱 파일명
 ss.setdefault("img_cache", {})        # 검색어→(bytes,credit) 세션 캐시
+ss.setdefault("img_prompt_json", "")  # 슬라이드 이미지 생성 프롬프트 JSON
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +194,7 @@ def clear_artifacts() -> None:
     ss.syllabus_md, ss.syllabus_msgs = "", []
     ss.script_doc_md, ss.script_ppt_md = "", ""
     ss.script_doc_msgs, ss.script_ppt_msgs = [], []
-    ss.deck_bytes, ss.credits_txt, ss.deck_name = None, "", ""
+    ss.deck_bytes, ss.credits_txt, ss.deck_name, ss.img_prompt_json = None, "", "", ""
     ss.script_week, ss.step = 1, 1
 
 
@@ -207,7 +208,7 @@ def load_project_into_session(pid: int) -> None:
     ss.script_week = p["script_week"] or 1
     ss.script_doc_md, ss.script_doc_msgs = p["script_doc_md"], p["script_doc_msgs"]
     ss.script_ppt_md, ss.script_ppt_msgs = p["script_ppt_md"], p["script_ppt_msgs"]
-    ss.deck_bytes, ss.credits_txt, ss.deck_name = None, "", ""
+    ss.deck_bytes, ss.credits_txt, ss.deck_name, ss.img_prompt_json = None, "", "", ""
 
 
 def persist() -> None:
@@ -428,8 +429,15 @@ def run_design(status) -> None:
     ss.deck_bytes = data
     ss.deck_name = deck_title
     ss.credits_txt = image_search.credits_text(f"{deck_title} — 이미지 출처 (CC 라이선스)", entries)
+
+    # 이미지 생성 프롬프트 번들(codex-prompt-img-studio 인풋 JSON)
+    status.markdown("**이미지 프롬프트 정리 중…**")
+    import json as _json
+    bundle = deck_builder.image_prompt_bundle(plan, deck_title, generate_fn=gen_fn)
+    ss.img_prompt_json = _json.dumps(bundle, ensure_ascii=False, indent=2)
+
     n_pic = len(images)
-    status.markdown(f"**완료** — {len(plan)}장 · 사진 {n_pic}장 삽입. 아래에서 내려받으세요.")
+    status.markdown(f"**완료** — {len(plan)}장 · 사진 {n_pic}장 삽입 · 이미지 프롬프트 {bundle['count']}개. 아래에서 내려받으세요.")
 
 
 def script_downloads(md_key, doc_key, is_ppt):
@@ -772,6 +780,12 @@ elif ss.step == 4:
                 bc[2].download_button("⬇ 이미지 출처(.txt)", ss.credits_txt.encode("utf-8"),
                                       file_name=(ss.deck_name or "슬라이드") + "_이미지출처.txt",
                                       mime="text/plain", key="dl_credits", use_container_width=True)
+                if ss.img_prompt_json:
+                    bc[3].download_button("⬇ 이미지 프롬프트(.json)", ss.img_prompt_json.encode("utf-8"),
+                                          file_name=(ss.deck_name or "슬라이드") + "_이미지프롬프트.json",
+                                          mime="application/json", key="dl_imgprompt",
+                                          use_container_width=True,
+                                          help="슬라이드별 이미지 생성 프롬프트 묶음(codex-prompt-img-studio 입력용)")
 
             _tpl_on = TEMPLATE_PATH.exists()
             with st.expander(f"PPT 회사 양식(.pptx) — {'적용됨 ✓' if _tpl_on else '기본 양식 사용 중'}"):

@@ -32,11 +32,15 @@ _HEX = {
     "white": (0xFF, 0xFF, 0xFF),
     "grey": (0x44, 0x49, 0x57),
     "sub": (0xCA, 0xDC, 0xFC),
+    # 도형 구분용 — 서로 뚜렷이 구별되며 흰 글씨가 읽히는 중간톤
+    "blue": (0x2F, 0x6F, 0xD6),
+    "green": (0x2F, 0x7D, 0x4F),
+    "plum": (0x6B, 0x4E, 0x8E),
 }
 
-# 프로세스 노드 / 카드 뱃지 색 로테이션
-_NODE_ROT = ("navy_dk", "navy", "teal", "navy_dk2", "teal")
-_BADGE_ROT = ("navy", "teal", "amber", "navy_dk")
+# 프로세스 노드 / 카드 뱃지 색 로테이션 — 인접 노드가 확실히 구분되도록
+_NODE_ROT = ("navy", "teal", "blue", "plum", "green")
+_BADGE_ROT = ("navy", "teal", "blue", "plum")
 
 
 def _rgb(name):
@@ -133,6 +137,16 @@ def _diamond(slide, x, y, w, h, fill="amber"):
     return shp
 
 
+def _arrow(slide, x, y, w, h, fill="amber"):
+    """단계·순서 연결자(다이아몬드 대신 화살표) — 첨삭 반영."""
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+    shp = slide.shapes.add_shape(MSO_SHAPE.RIGHT_ARROW, Inches(x), Inches(y), Inches(w), Inches(h))
+    _no_deco(shp)
+    shp.fill.solid(); shp.fill.fore_color.rgb = _rgb(fill)
+    return shp
+
+
 def _text(slide, x, y, w, h, anchor="t"):
     from pptx.util import Inches
     from pptx.enum.text import MSO_ANCHOR
@@ -179,15 +193,18 @@ def add_title(slide, text):
     _run(_para(tf, True), text or "", TITLE_SZ, "navy", bold=True)
 
 
-def add_chip(slide, text, x=MARGIN, y=CHIP_Y, w=CONTENT_W):
-    """요약칩: 배경 라운드 + 앰버 점 + 네이비 굵은 한 문장. 반환=칩 하단 y."""
+def add_chip(slide, text, x=MARGIN, y=CHIP_Y, w=CONTENT_W, emphasis=False):
+    """요약칩: 배경 라운드 + 앰버 점 + 굵은 한 문장. 반환=칩 하단 y.
+
+    emphasis=True(문제/질문/목표/퀴즈)면 네이비 배경+흰 글씨로 강조.
+    """
     if not text:
         return y
     h = 0.9
-    _rrect(slide, x, y, w, h, fill="chip", radius=0.5)
+    _rrect(slide, x, y, w, h, fill=("navy" if emphasis else "chip"), radius=0.5)
     _oval(slide, x + 0.18, y + 0.36, 0.18, "amber")
     tf = _text(slide, x + 0.5, y, w - 0.7, h, anchor="m")
-    _run(_para(tf, True, line=1.1), text, 15, "navy", bold=True)
+    _run(_para(tf, True, line=1.1), text, 15, ("white" if emphasis else "navy"), bold=True)
     return y + h
 
 
@@ -281,27 +298,29 @@ def render_section(slide, s):
 
 # 사진 배치 프리셋(v2 실측): 슬라이드마다 순환해 크기·위치를 다양화.
 # img=(L,T,W,H), tx/tw=텍스트(칩·본문) 열, below=이미지가 하단(본문은 위 전폭).
+# 세로형(2.83폭)은 가로 사진을 잘라먹어 제거 — 정사각/가로형/하단와이드만 사용(첨삭 반영).
 PHOTO_PRESETS = [
     {"img": (8.15, 2.5, 4.15, 4.15), "tx": 0.6, "tw": 7.3},                 # 우측 정사각
     {"img": (0.5, 2.5, 4.15, 4.15), "tx": 4.95, "tw": 7.85},               # 좌측 정사각(텍스트 우)
-    {"img": (10.0, 2.3, 2.83, 4.1), "tx": 0.6, "tw": 9.1},                 # 우측 세로형
-    {"img": (0.5, 2.3, 2.83, 4.1), "tx": 3.6, "tw": 9.2},                  # 좌측 세로형(텍스트 우)
-    {"img": (9.08, 2.7, 3.75, 3.75), "tx": 0.6, "tw": 8.2},                # 우측 중간
+    {"img": (8.0, 2.75, 4.8, 3.2), "tx": 0.6, "tw": 7.1},                  # 우측 가로형
+    {"img": (0.5, 2.75, 4.8, 3.2), "tx": 5.5, "tw": 7.3},                  # 좌측 가로형(텍스트 우)
+    {"img": (9.08, 2.7, 3.75, 3.75), "tx": 0.6, "tw": 8.2},                # 우측 중간 정사각
     {"img": (2.7, 4.75, 7.9, 2.35), "tx": 0.6, "tw": 12.1, "below": True}, # 하단 와이드(텍스트 위 전폭)
 ]
 
 
 def render_photo(slide, s, img):
     add_title(slide, s.get("title", ""))
+    emph = bool(s.get("emphasis"))
     if not img:
-        by = add_chip(slide, s.get("chip"))
+        by = add_chip(slide, s.get("chip"), emphasis=emph)
         add_bullets(slide, s.get("bullets", []), MARGIN + 0.02, by + 0.15,
                     CONTENT_W, 6.95 - (by + 0.15))
         return
     p = PHOTO_PRESETS[s.get("_idx", 0) % len(PHOTO_PRESETS)]
     add_photo(slide, img, *p["img"])
     tx, tw = p["tx"], p["tw"]
-    by = add_chip(slide, s.get("chip"), x=tx, w=tw)
+    by = add_chip(slide, s.get("chip"), x=tx, w=tw, emphasis=emph)
     top = by + 0.15
     bottom = (p["img"][1] - 0.15) if p.get("below") else 6.95
     add_bullets(slide, s.get("bullets", []), tx + 0.02, top, tw - 0.04, max(1.0, bottom - top))
@@ -309,7 +328,7 @@ def render_photo(slide, s, img):
 
 def render_bullets(slide, s):
     add_title(slide, s.get("title", ""))
-    by = add_chip(slide, s.get("chip"))
+    by = add_chip(slide, s.get("chip"), emphasis=bool(s.get("emphasis")))
     add_bullets(slide, s.get("bullets", []), MARGIN + 0.02, max(by + 0.2, 2.72),
                 CONTENT_W, 6.9 - max(by + 0.2, 2.72))
 
@@ -336,7 +355,7 @@ def render_process(slide, s):
             tf2 = _text(slide, x + 0.05, y + node_h + 0.05, node_w - 0.1, 1.0, anchor="t")
             _run(_para(tf2, True, align="c", line=1.1), desc, 11, "grey", bold=False)
         if i < n - 1:
-            _diamond(slide, x + node_w - 0.13, y + node_h / 2 - 0.16, 0.26, 0.32, "amber")
+            _arrow(slide, x + node_w + 0.03, y + node_h / 2 - 0.14, gap - 0.06, 0.28, "amber")
     add_footer_key(slide, s.get("key") or s.get("footer"))
 
 
@@ -345,22 +364,29 @@ def render_cards(slide, s):
     add_chip(slide, s.get("chip"))
     items = s.get("items") or [{"label": b} for b in s.get("bullets", [])]
     items = items[:4] or [{"label": "항목"}]
+    numbered = bool(s.get("numbered", False))  # 비순차 분류는 숫자 없음(첨삭)
     n = len(items)
     gap = 0.34
     card_w = (CONTENT_W - gap * (n - 1)) / n
     y, card_h = 2.95, 2.7
     for i, it in enumerate(items):
         x = MARGIN + i * (card_w + gap)
+        accent = _BADGE_ROT[i % len(_BADGE_ROT)]
         _rrect(slide, x, y, card_w, card_h, fill="white", radius=0.1,
                line="chip", line_w=1.5)
-        badge = _BADGE_ROT[i % len(_BADGE_ROT)]
-        _oval(slide, x + 0.28, y + 0.28, 0.55, badge)
-        tfb = _text(slide, x + 0.28, y + 0.28, 0.55, 0.55, anchor="m")
-        _run(_para(tfb, True, align="c"), str(i + 1), 16, "white", bold=True)
-        tft = _text(slide, x + 0.28, y + 1.0, card_w - 0.56, 0.5)
+        if numbered:
+            _oval(slide, x + 0.28, y + 0.28, 0.55, accent)
+            tfb = _text(slide, x + 0.28, y + 0.28, 0.55, 0.55, anchor="m")
+            _run(_para(tfb, True, align="c"), str(i + 1), 16, "white", bold=True)
+        else:
+            # 숫자 대신 색 구분 도형(상단 컬러 바)
+            _rrect(slide, x, y, card_w, 0.16, fill=accent, radius=0.3)
+            _oval(slide, x + 0.28, y + 0.4, 0.22, accent)
+        tft = _text(slide, x + 0.28, y + (1.0 if numbered else 0.78), card_w - 0.56, 0.5)
         _run(_para(tft, True), it.get("label", ""), 16, "navy", bold=True)
         if it.get("desc"):
-            tfd = _text(slide, x + 0.28, y + 1.55, card_w - 0.56, card_h - 1.7)
+            dy = y + (1.55 if numbered else 1.33)
+            tfd = _text(slide, x + 0.28, dy, card_w - 0.56, card_h - (dy - y) - 0.15)
             _run(_para(tfd, True, line=1.15), it["desc"], 12.5, "grey", bold=False)
     add_footer_key(slide, s.get("key") or s.get("footer"))
 
@@ -373,14 +399,20 @@ def render_compare(slide, s):
         items.append({"label": "", "desc": ""})
     y, h = 2.95, 3.6
     col_w = (CONTENT_W - 0.4) / 2
+    colors = ("navy", "teal")
     for i, it in enumerate(items):
         x = MARGIN + i * (col_w + 0.4)
         _rrect(slide, x, y, col_w, h, fill="chip", radius=0.08)
-        tft = _text(slide, x + 0.3, y + 0.25, col_w - 0.6, 0.6)
-        _run(_para(tft, True), it.get("label", ""), 17, "navy", bold=True)
+        # 컬러 헤더 바 + 가운데 정렬 라벨(첨삭: 비교 라벨 가운데 정렬)
+        _rrect(slide, x, y, col_w, 0.62, fill=colors[i % 2], radius=0.08)
+        tft = _text(slide, x + 0.2, y, col_w - 0.4, 0.62, anchor="m")
+        _run(_para(tft, True, align="c"), it.get("label", ""), 16, "white", bold=True)
         lines = it.get("lines") or ([it.get("desc")] if it.get("desc") else [])
         if lines:
-            add_bullets(slide, lines, x + 0.3, y + 1.0, col_w - 0.6, h - 1.2, size=13.5)
+            tf = _text(slide, x + 0.25, y + 0.85, col_w - 0.5, h - 1.0, anchor="t")
+            for j, ln in enumerate(lines):
+                _run(_para(tf, j == 0, align="c", space_after=7, line=1.2),
+                     str(ln), 13.5, "grey", bold=False)
 
 
 def render_table(slide, s):
@@ -397,22 +429,25 @@ def render_table(slide, s):
     tbl_shape = slide.shapes.add_table(nrow, ncol, Inches(MARGIN), Inches(y),
                                        Inches(CONTENT_W), Inches(min(0.5 * nrow, 4.0)))
     tbl = tbl_shape.table
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+
+    def _style_cell(cell, text, *, bold, size):
+        cell.text = str(text)
+        cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+        for para in cell.text_frame.paragraphs:
+            para.alignment = PP_ALIGN.CENTER  # 첨삭: 표 셀 텍스트 가운데 정렬
+            for run in para.runs:
+                run.font.bold = bold; run.font.size = Pt(size); run.font.name = FONT
+
     r0 = 0
     if headers:
         for c, htxt in enumerate(headers):
-            cell = tbl.cell(0, c)
-            cell.text = str(htxt)
-            for para in cell.text_frame.paragraphs:
-                for run in para.runs:
-                    run.font.bold = True; run.font.size = Pt(12); run.font.name = FONT
+            _style_cell(tbl.cell(0, c), htxt, bold=True, size=12)  # 헤더 bold
         r0 = 1
     for ri, row in enumerate(rows_data):
         for c in range(ncol):
-            cell = tbl.cell(ri + r0, c)
-            cell.text = str(row[c]) if c < len(row) else ""
-            for para in cell.text_frame.paragraphs:
-                for run in para.runs:
-                    run.font.size = Pt(11); run.font.name = FONT
+            _style_cell(tbl.cell(ri + r0, c), row[c] if c < len(row) else "",
+                        bold=False, size=11)
 
 
 _RENDER = {
@@ -484,23 +519,34 @@ _ART_RULES = """개요의 '### 슬라이드 N' 블록 하나당 JSON 객체 하�
 각 객체 스키마:
 {
   "type": "section|photo|process|cards|compare|table|bullets",
-  "title": "슬라이드 제목",
-  "chip": "요약 한 문장(핵심 메시지)",
-  "bullets": ["불릿 3~5개"],
+  "title": "간결·정확한 제목",
+  "chip": "요약 한 문장(명사형). 없으면 생략 가능",
+  "bullets": ["불릿 3~5개(명사형 어미)"],
   "items": [{"label":"짧은 이름","desc":"한 줄 설명"}],
-  "image_query": "photo형일 때만, 영어 검색어(예: 'classroom students learning')"
+  "image_query": "photo형일 때만, 영어 검색어",
+  "numbered": false,
+  "emphasis": false
 }
-타입 선택 규칙(우선순위 순):
-- "cover"는 만들지 마라(표지는 시스템이 자동으로 맨 앞에 추가한다).
-- **"photo"를 최우선으로, 전체 슬라이드의 약 55~65%에 사용하라.** 사진으로 보완될 여지가 조금이라도 있으면 photo 를 선택하고 영어 image_query 를 넣는다(bullets 3~4개).
-  · image_query 는 **주제·이론과 직접 관련된 구체적 영어 검색어**로(막연한 'education' 금지). 예) 행동주의→'Pavlov classical conditioning dog experiment', 인지주의→'human brain memory diagram', 구성주의→'students collaborative project based learning', 매체→'classroom multimedia projector lesson', 평가→'students taking written exam', 커뮤니케이션→'Shannon Weaver communication model', 플립러닝→'flipped classroom students laptop', 원격교육→'online video lecture student'. 강의실·학생·교사·실험·기기 장면은 거의 항상 사진 가능.
-- 구성요소/단계/절차의 '순서'가 핵심인 것만: "process" (items[].label 2~5개).
-- 3~4개의 병렬 개념·분류·유형: "cards" (items[].label + desc).
+문체·제목:
+- 불릿·라벨은 **명사형 어미**(예 "즉시 피드백 제공" → "즉시 피드백"). 존댓말·서술체·교수자 나레이션 문장 금지.
+- 제목은 간결·일관("정의와 과정"·"개요"·"논의" 같은 군더더기 제거).
+타입 선택 규칙:
+- "cover"는 만들지 마라(표지는 시스템이 맨 앞에 자동 추가).
+- 순서·단계·절차가 핵심: "process" (items[].label 2~5개). 화살표로 연결됨.
+- 병렬·분류·구성요소: "cards" (items[].label + desc). **비순차이므로 numbered=false(기본). 순서가 있을 때만 numbered=true.**
 - 두 개념 대비/비교: "compare" (items 2개, 각 {"label","lines":[...]}).
-- 표가 꼭 필요한 것(구성 개요·평가 유형 등): "table" (headers:[...], rows:[[...]]).
+- 구성 개요·유형 비교 등 표가 자연스러운 것: "table" (headers:[...], rows:[[...]]).
 - 도입·구간 전환: "section".
-- 위 어디에도 안 맞을 때만: "bullets".
-공통: 모든 슬라이드에 chip(요약 한 문장). 같은 타입이 여러 장 연속되지 않게 섞되 photo 비중을 40~50%로 유지. process/cards엔 key(하단 핵심 한 줄)를 넣어도 좋다.
+- 사진이 이해를 돕는 개념/사례/인물: "photo" + 구체적 영어 image_query(막연한 'education' 금지). 예) 행동주의→'Pavlov conditioning experiment', 인지주의→'human brain memory diagram', 매체→'classroom projector lesson', 인물→'portrait of a scholar'. 전체의 약 40~55%.
+- 그 외: "bullets".
+이미지 배치 규칙(중요):
+- **학습목표·문제·퀴즈·순수 정리 슬라이드는 photo 로 하지 말 것(이미지 없음).** 이런 슬라이드는 bullets/cards/table 로.
+- 사례·실물·인물·대표 이론 슬라이드에는 photo 지정.
+강조(emphasis):
+- **emphasis=true 는 문제/질문/학습목표/퀴즈 슬라이드에만.** 그 외에는 false(강조 남용 금지).
+공통:
+- 같은 타입이 여러 장 연속되지 않게 섞는다. 동일 내용이 반복되면 한 슬라이드로 합친다.
+- process/cards엔 key(하단 핵심 한 줄, 명사형)를 넣어도 좋다.
 """
 
 
@@ -637,3 +683,71 @@ def image_queries(plan: List[Dict]) -> Dict[int, str]:
         if (s.get("type") == "photo") and s.get("image_query"):
             out[i] = s["image_query"]
     return out
+
+
+# ── 이미지 생성 프롬프트 번들 (codex-prompt-img-studio 인풋 JSON) ──────────
+DEFAULT_STYLE_HINT = ("clean modern educational illustration, flat vector with subtle depth, "
+                      "soft navy (#1E2761) and amber (#F2A900) accents, uncluttered, 16:9")
+
+_IMGPROMPT_SYS = ("너는 강의 슬라이드용 이미지 생성 프롬프트 작가다. 각 슬라이드 제목/요약을 보고 "
+                  "이미지 생성 모델(diffusion)용 **영어** 프롬프트 한 줄을 만든다. 그림 안에 글자·워터마크·"
+                  "로고가 들어가지 않게 하고, 주제를 상징하는 구체적 장면/오브젝트로 묘사한다. "
+                  "JSON 배열 [{\"n\":정수,\"prompt\":\"...\"}] 만 출력한다.")
+
+
+def _prompt_place(s: Dict) -> bool:
+    """이미지를 실제로 배치할 슬라이드인가(학습목표·문제·퀴즈·표지·섹션 제외)."""
+    if s.get("emphasis"):
+        return False
+    return (s.get("type") or "bullets") not in ("cover", "section", "table")
+
+
+def image_prompt_bundle(plan: List[Dict], deck_title: str, *,
+                        generate_fn: Optional[Callable[[str, str, int], str]] = None,
+                        style_hint: str = DEFAULT_STYLE_HINT) -> Dict:
+    """덱 전체 슬라이드의 이미지 생성 프롬프트를 1개 번들(dict)로.
+
+    generate_fn 이 있으면 LLM으로 영어 프롬프트를 짓고(청크·폴백), 없으면
+    image_query/제목 기반으로 결정론적으로 만든다. codex-prompt-img-studio 가
+    'prompts' 배열을 위→아래 순차 실행하도록 설계.
+    """
+    n = len(plan)
+    en: Dict[int, str] = {}
+    if generate_fn:
+        idx = list(range(n))
+        for a in range(0, n, _CHUNK):
+            ch = idx[a:a + _CHUNK]
+            lines = "\n".join(
+                f'{i + 1}. {plan[i].get("title", "")} | {plan[i].get("chip", "")}' for i in ch)
+            user = (f"[공통 스타일] {style_hint}\n"
+                    f"아래 슬라이드 {len(ch)}개 각각에 대해 n(슬라이드 번호)과 영어 이미지 프롬프트를 만들어라. "
+                    f"프롬프트에 공통 스타일을 녹이고, 그림 안 텍스트 금지.\n\n{lines}")
+            try:
+                arr = _extract_json_array(generate_fn(_IMGPROMPT_SYS, user, 6000))
+            except Exception as e:  # noqa: BLE001
+                print(f"[imgprompt] 청크 오류: {e}", flush=True); arr = None
+            if isinstance(arr, list):
+                for o in arr:
+                    if isinstance(o, dict) and o.get("n") and o.get("prompt"):
+                        en[int(o["n"]) - 1] = str(o["prompt"]).strip()
+
+    prompts = []
+    for i, s in enumerate(plan):
+        subj = en.get(i) or s.get("image_query") or f"conceptual illustration for '{s.get('title', '')}'"
+        prompt = f"{subj}. {style_hint}. No text, no watermark, no logo."
+        prompts.append({
+            "n": i + 1,
+            "title": s.get("title", ""),
+            "type": s.get("type", "bullets"),
+            "prompt": prompt,
+            "negative": "text, letters, watermark, logo, low quality, distorted",
+            "keywords": ([s["image_query"]] if s.get("image_query") else []),
+            "place": _prompt_place(s),
+        })
+    return {
+        "deck": deck_title,
+        "style_hint": style_hint,
+        "aspect": "landscape",
+        "count": n,
+        "prompts": prompts,
+    }
