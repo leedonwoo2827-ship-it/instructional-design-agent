@@ -1,0 +1,24 @@
+{
+  "name": "navy-amber",
+  "label": "네이비 + 앰버 (기본)",
+  "note": "처음부터 쓰던 배색. 진한 남색 제목 + 앰버 강조. 인쇄에서도 대비가 확실하다.",
+  "font": "Pretendard",
+  "colors": {
+    "navy": "1E2761",
+    "navy_75": "565D88",
+    "navy_55": "8388A8",
+    "navy_30": "BBBED0",
+    "navy_12": "E4E5EC",
+    "chip": "EEF2FB",
+    "amber": "F2A900",
+    "amber_dk": "B57F00",
+    "amber_wash": "FDF3DC",
+    "ink": "2B3440",
+    "on_navy": "A9B0CE",
+    "white": "FFFFFF",
+    "navy_dk": "1E2761"
+  },
+  "_mapping": {
+    "navy_dk": "글자가 얹히는 밴드 배경 — navy 가 이미 13.8:1 — 밴드 색을 바꿀 필요가 없다(외형 유지)"
+  }
+}

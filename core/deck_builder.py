@@ -47,6 +47,7 @@ _HEX = {
     "amber_dk": (0xB5, 0x7F, 0x00),   # 앰버 계열 텍스트가 꼭 필요할 때
     "amber_wash": (0xFD, 0xF3, 0xDC),  # 강조 존 배경
     "ink":      (0x2B, 0x34, 0x40),   # 본문 글자
+    "navy_dk":  (0x1E, 0x27, 0x61),   # 글자가 얹히는 밴드 배경 (기본은 navy 와 동일)
     "on_navy":  (0xA9, 0xB0, 0xCE),   # 네이비 위 보조 글자
     "white":    (0xFF, 0xFF, 0xFF),
 }
@@ -123,6 +124,59 @@ def _rgb(name):
 
 def _hexstr(name: str) -> str:
     return "%02X%02X%02X" % _HEX[name]
+
+
+def luminance(name: str) -> float:
+    """상대 휘도(0~1). WCAG 식 — 감마 보정을 해야 사람 눈과 맞는다."""
+    def lin(c: float) -> float:
+        c /= 255.0
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = _HEX.get(name, (0, 0, 0))
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+
+def band(name: str, min_ratio: float = 4.5) -> str:
+    """글자를 얹을 밴드의 채움색 — 대비가 모자라면 `<name>_dk` 로 바꾼다.
+
+    템플릿마다 주색의 밝기가 다르다. 기본 배색의 navy(#1E2761)는 흰글씨와
+    13.8:1 이라 그대로 써도 되지만, 리디자인의 navy(#2E93D9)는 3.3:1 이고
+    amber(#4CB782)는 2.5:1 로 어떤 글자색을 얹어도 안 읽힌다.
+
+    그래서 **모자랄 때만** 진한 짝을 쓴다. 넉넉한 템플릿은 손대지 않으므로
+    기존 덱의 외형이 바뀌지 않는다.
+    """
+    def _best(bg: str) -> float:
+        lb = luminance(bg)
+        def r(a, b):
+            hi, lo = max(a, b), min(a, b)
+            return (hi + 0.05) / (lo + 0.05)
+        return max(r(luminance("white"), lb), r(luminance("ink"), lb))
+
+    if _best(name) >= min_ratio:
+        return name
+    dk = f"{name}_dk"
+    if dk in _HEX and _best(dk) > _best(name):
+        return dk
+    return name
+
+
+def on_color(bg: str, light: str = "white", dark: str = "ink") -> str:
+    """배경 위에 얹을 글자색 — 명암비가 큰 쪽을 고른다.
+
+    색을 박아 두면 템플릿에서 배경색을 바꿀 때 대비가 무너진다. 실제로 앰버
+    밴드에는 어두운 글씨(6.9:1)가 맞고 흰 글씨(2.1:1)는 안 읽히는데, 초록 밴드는
+    그 반대다. 그래서 고정값 대신 계산한다.
+
+    ★ 어두운 쪽 기본값은 `navy` 가 아니라 **`ink`(본문 글자색)** 다. `navy` 는
+      템플릿에 따라 진한 남색일 수도, 중간톤 블루일 수도 있다 — 리디자인 배색에서
+      navy=#2E93D9 였고, 그걸 글자색으로 쓰면 연한 배경에서 2.8:1 로 떨어졌다.
+      `ink` 는 어느 템플릿에서든 '가장 읽히는 글자색' 이라는 뜻이 유지된다.
+    """
+    def ratio(a: float, b: float) -> float:
+        hi, lo = max(a, b), min(a, b)
+        return (hi + 0.05) / (lo + 0.05)
+    lb = luminance(bg)
+    return light if ratio(luminance(light), lb) >= ratio(luminance(dark), lb) else dark
 
 
 # ── 저수준 헬퍼 ───────────────────────────────────────────────────────────
@@ -474,6 +528,21 @@ def add_bullets(slide, bullets, x, y, w, h, *, role="bullet", marker=True,
     _normautofit(tf, scale=min(1.0, pt / t["size"]))
 
 
+def add_photo_slot(slide, x, y, w, h):
+    """사진이 아직 없을 때의 **빈 액자**. 자리를 확정해 배치가 두 번 바뀌지 않게 한다.
+
+    글자를 넣지 않는다 — 사진 수집을 건너뛴 덱이 그대로 쓰일 수도 있고, 그때
+    '사진 자리' 같은 문구가 남으면 미완성으로 보인다. 대신 옅은 워시와 헤어라인,
+    가운데 작은 표식으로 '여기 그림이 들어갈 자리' 를 알린다.
+    """
+    box = _rrect(slide, x, y, w, h, fill="chip", radius=R_PHOTO,
+                 line="navy_12", line_w=1.25)
+    # 가운데 작은 원 — 도형이므로 어느 배색에서도 튀지 않는다
+    d = min(w, h) * 0.11
+    _oval(slide, x + (w - d) / 2, y + (h - d) / 2, d, "navy_30")
+    return box
+
+
 def add_photo(slide, data, x, y, w, h, *, credit=None):
     from pptx.util import Inches
     from pptx.oxml.ns import qn
@@ -642,12 +711,24 @@ def render_bullets(slide, s, img=None):
 
 
 def render_photo(slide, s, img=None):
+    """사진 슬라이드. 사진이 없어도 **자리는 남긴다.**
+
+    예전에는 사진이 없으면 전폭 불릿으로 되돌아갔다. 그래서 초안(2단계) 덱에서는
+    사진 자리가 보이지 않고, 사진을 넣는 3단계에서야 비로소 자리가 생기며 글이
+    한쪽으로 밀렸다 — 배치가 두 번 바뀌는 셈이었다.
+
+    지금은 빈 액자를 그려 자리를 확정한다. 그래서
+      · 초안만 보고도 최종 배치를 알 수 있다
+      · 사진 수집(3단계)을 건너뛰고 대본·영상으로 바로 가도 배치가 그대로다
+      · 직접 그림을 그려 넣을 때 어느 크기·위치에 맞출지 눈으로 보인다
+    """
     y = _head(slide, s)
     emph = bool(s.get("emphasis"))
-    if not img:
-        return render_bullets(slide, s)
     p = PHOTO_PRESETS[s.get("_photo_ord", 0) % len(PHOTO_PRESETS)]
-    add_photo(slide, img, *p["img"], credit=s.get("_credit_short"))
+    if img:
+        add_photo(slide, img, *p["img"], credit=s.get("_credit_short"))
+    else:
+        add_photo_slot(slide, *p["img"])
     tx, tw = p["tx"], p["tw"]
     by = add_chip(slide, s.get("chip"), x=tx, y=y, w=tw, emphasis=emph)
     # 칩이 없으면 본문을 사진 윗선에 맞춘다(칩이 있을 때는 칩 아래).
@@ -760,8 +841,11 @@ def render_compare(slide, s, img=None):
     col_h = BODY_BOTTOM - cy
     col_w = (CONTENT_W - 0.42) / 2
     head_h = 0.60
-    fills = ("navy", "amber")            # 2색 체계 — teal 제거
-    heads = ("white", "navy")
+    # 밴드에 글자가 얹히므로 대비가 모자라면 진한 짝으로 바꾼다(템플릿마다 다르다)
+    fills = (band("navy"), band("amber"))
+    # ★ 글자색을 고정하지 않고 **배경 밝기로 고른다.** 색을 박아 두면 템플릿에서
+    #   밴드 색을 바꿨을 때 대비가 무너진다(초록 밴드에 남색 글씨가 흐릿했다).
+    heads = tuple(on_color(f) for f in fills)
     td = TYPE["td"]
 
     for i, it in enumerate(items):
@@ -1101,11 +1185,14 @@ def build_deck(plan: List[Dict], template_path: Optional[str] = None,
                deck_title: str = "강의 슬라이드",
                logo_path: Optional[str] = None, *,
                footer: str = "", assets_dir=None,
-               embed_font: bool = True) -> Optional[bytes]:
+               embed_font: bool = True,
+               template: Optional[str] = None) -> Optional[bytes]:
     """슬라이드플랜 → 디자인된 .pptx 바이트. python-pptx 미설치 시 None.
 
     embed_font=False 면 Pretendard 를 '이름으로만' 지정한다(파일 ~3MB 작아지지만
     폰트가 설치되지 않은 PC 에서는 대체 폰트로 열린다).
+
+    template — templates/<이름>.json 의 배색·글꼴을 적용한다. None 이면 기본 배색.
     """
     global _FS
     try:
@@ -1114,8 +1201,23 @@ def build_deck(plan: List[Dict], template_path: Optional[str] = None,
     except Exception:  # noqa: BLE001
         return None
 
+    # ★ 색·글꼴을 먼저 갈아끼운다. 도형을 그리기 시작한 뒤에 바꾸면 앞뒤 장의
+    #   색이 섞인다.
+    from core import palette as _pal
+    _tpl = _pal.apply(template)
+
     adir = assets_dir or ASSETS_DIR
     _FS = pptx_font.font_set(adir)
+    # 템플릿이 **Pretendard 아닌** 글꼴을 지정했을 때만 갈아끼운다.
+    #   · Pretendard 는 font_set() 이 이미 다룬다 — assets 에 파일이 있으면 임베드하고,
+    #     없으면 맑은 고딕으로 폴백한다. 여기서 덮어쓰면 그 폴백이 깨져서
+    #     설치도 안 된 Pretendard 를 이름으로만 지정하게 된다(실측: 회귀했다).
+    #   · 임베드는 Pretendard 만 가능하므로 다른 글꼴은 이름만 넣는다.
+    _tpl_font = (_tpl.get("font") or "").strip()
+    if _tpl_font and _tpl_font.lower() != pptx_font.PREFERRED.lower():
+        _FS = pptx_font.FontSet(regular=_tpl_font, semibold=_tpl_font,
+                                bold=_tpl_font, embedded=False)
+        _log(f"[font] 템플릿 글꼴: {_tpl_font} (임베드 불가 — 이름만 지정)")
 
     images = images or {}
     use_tpl = bool(template_path and os.path.isfile(template_path))
@@ -1223,6 +1325,13 @@ _ART_RULES = """개요의 '### 슬라이드 N' 블록 하나당 JSON 객체 하�
 - 불릿·라벨은 **명사형 어미**(예 "즉시 피드백 제공" → "즉시 피드백"). 존댓말·서술체·교수자 나레이션 문장 금지.
 - 제목은 간결·일관("정의와 과정"·"개요"·"논의" 같은 군더더기 제거).
 - **불릿 한 줄은 32자 이내.** 길면 두 항목으로 쪼갠다(슬라이드가 넘친다).
+**사진 비중 — 반드시 지킬 것**:
+- 이 덱은 강의 **영상**으로 렌더된다. 도형만 이어지면 화면이 단조로워진다.
+- **본문 슬라이드의 약 절반을 "photo" 로 배정한다.** 개념 설명·사례·인물·현장
+  장면처럼 시각화가 도움이 되는 것은 photo 를 우선한다.
+- photo 로 하면 `image_query`(영어 검색어)를 **반드시** 넣는다. 없으면 사진을 못 찾는다.
+- 표·수치·순서·2단 대비처럼 **구조가 정보 자체인 것만** table/stat/process/compare 로 둔다.
+- 학습목표·목차·퀴즈·마무리에는 사진을 넣지 않는다(objectives/agenda/quiz/closing).
 타입 선택 규칙:
 - "cover"는 만들지 마라(표지는 시스템이 맨 앞에 자동 추가).
 - **학습목표 슬라이드 → "objectives"** (bullets 에 목표 2~3개). 이미지 없음.
@@ -1461,14 +1570,22 @@ def image_queries(plan: List[Dict]) -> Dict[int, str]:
 
 
 # ── 이미지 생성 프롬프트 번들 (codex-prompt-img-studio 인풋 JSON) ──────────
+# ★ 비율은 **정사각에 가깝게** 지시한다. 사진은 화면 전체가 아니라 좌우 세로 패널에
+#   들어가고(4.18~4.78 × 4.69 in → 0.89~1.02), add_photo() 가 센터 크롭을 한다.
+#   16:9 로 만들면 좌우가 32~41% 잘려 좌우 대조 구도가 통째로 날아간다(실측).
 DEFAULT_STYLE_HINT = (
     "clean modern educational illustration, flat vector with subtle depth, "
     "consistent line weight, no gradient mesh, soft navy (#1E2761) and "
-    "amber (#F2A900) accents, generous negative space, uncluttered, 16:9")
+    "amber (#F2A900) accents, generous negative space, uncluttered, "
+    "square 1:1 composition with the subject centered and margins on all sides "
+    "(the image is center-cropped into a near-square panel)")
 
 _IMGPROMPT_SYS = ("너는 강의 슬라이드용 이미지 생성 프롬프트 작가다. 각 슬라이드 제목/요약을 보고 "
                   "이미지 생성 모델(diffusion)용 **영어** 프롬프트 한 줄을 만든다. 그림 안에 글자·워터마크·"
                   "로고가 들어가지 않게 하고, 주제를 상징하는 구체적 장면/오브젝트로 묘사한다. "
+                  "구도는 **정사각(1:1)에 가깝게** 잡고 주요 오브젝트를 가운데 모은다 — "
+                  "좌우로 넓게 벌린 구도는 슬라이드에서 양옆이 잘린다. "
+                  "**공통 스타일 문구는 반복하지 마라**(시스템이 뒤에 한 번 붙인다). "
                   "JSON 배열 [{\"n\":정수,\"prompt\":\"...\"}] 만 출력한다.")
 
 # 이미지를 실제로 '올릴 자리'가 있는 타입.
@@ -1508,17 +1625,28 @@ def apply_images(plan: List[Dict], images: Dict[int, bytes]):
 
 def image_prompt_bundle(plan: List[Dict], deck_title: str, *,
                         generate_fn: Optional[Callable[[str, str, int], str]] = None,
-                        style_hint: str = DEFAULT_STYLE_HINT) -> Dict:
-    """덱 전체 슬라이드의 이미지 생성 프롬프트를 1개 번들(dict)로.
+                        style_hint: str = DEFAULT_STYLE_HINT,
+                        have_photos: Optional[set] = None) -> Dict:
+    """**이미지를 실제로 올릴 수 있는 슬라이드만** 프롬프트로 뽑아 1개 번들(dict)로.
+
+    전 슬라이드를 뽑던 것을 좁힌 이유: 배치 가능한 타입은 photo·bullets 뿐이고
+    (나머지는 도형 레이아웃이 자리를 다 쓴다), 42장을 뽑으면 34장이 '자리 없어
+    건너뜀' 으로 버려졌다. 만들지도 못할 프롬프트에 LLM 호출을 3배 쓰고,
+    받는 사람은 42장을 그리고 34장을 헛수고했다.
 
     generate_fn 이 있으면 LLM으로 영어 프롬프트를 짓고(청크·폴백), 없으면
     image_query/제목 기반으로 결정론적으로 만든다. 'prompts' 배열은 위→아래
-    순차 실행용이고, "n" 은 1-based 슬라이드 번호 = 이미지 파일명 규칙의 번호다.
+    순차 실행용이고, "n" 은 **1-based 슬라이드 번호** = 이미지 파일명 규칙의
+    번호다(003.png → 3번 슬라이드). 그래서 걸러내도 번호는 원래 것을 유지한다.
     """
-    n = len(plan)
+    total = len(plan)
+    # 자동 사진이 이미 붙은 슬롯은 뺀다 — 그건 그릴 필요가 없다.
+    # 남는 것 = "자리는 있는데 사진을 못 찾은 슬라이드" 뿐이고, 그게 그려야 할 목록이다.
+    got = set(int(i) for i in (have_photos or ()))
+    idx = [i for i, s_ in enumerate(plan) if _prompt_place(s_) and i not in got]
+    n = len(idx)
     en: Dict[int, str] = {}
-    if generate_fn:
-        idx = list(range(n))
+    if generate_fn and idx:
         for a in range(0, n, _CHUNK):
             ch = idx[a:a + _CHUNK]
             lines = "\n".join(
@@ -1537,11 +1665,15 @@ def image_prompt_bundle(plan: List[Dict], deck_title: str, *,
                         en[int(o["n"]) - 1] = str(o["prompt"]).strip()
 
     prompts = []
-    for i, s in enumerate(plan):
+    for i in idx:
+        s = plan[i]
         subj = (en.get(i) or s.get("image_query")
                 or f"conceptual illustration for '{s.get('title', '')}'")
         subj = str(subj).strip().rstrip(".").strip()       # 마침표 중복 방지
-        prompt = f"{subj}. {style_hint}. No text, no watermark, no logo."
+        # LLM 이 공통 스타일을 이미 녹여 넣는 경우가 있다 — 그대로 또 붙이면
+        # 같은 문구가 두 번 들어가 프롬프트가 두 배로 길어지고 주제가 묻힌다.
+        tail = "" if "flat vector" in subj.lower() else f" {style_hint}."
+        prompt = f"{subj}.{tail} No text, no watermark, no logo."
         prompts.append({
             "n": i + 1,
             "title": s.get("title", ""),
@@ -1557,8 +1689,13 @@ def image_prompt_bundle(plan: List[Dict], deck_title: str, *,
     return {
         "deck": deck_title,
         "style_hint": style_hint,
-        "aspect": "landscape",
-        "count": n,
+        # 슬라이드의 사진 자리는 세로 패널(≈1:1)이다. landscape 로 두면
+        # 생성 도구가 3:2 를 골라 좌우 30~40% 가 잘린다.
+        "aspect": "square",
+        "target_box": "near-square vertical panel (~1:1), center-cropped",
+        "count": n,                 # 뽑은 프롬프트 수 = 그려야 할 장수
+        "deck_slides": total,       # 덱 전체 장수 (번호 n 은 이 기준이다)
+        "photos_found": len(got),   # 자동 사진으로 이미 채워진 장수(프롬프트에서 제외됨)
         "file_naming": ("생성한 이미지는 images/ 폴더에 '슬라이드번호'로 저장하세요. "
                         "예: 003.png → 3번 슬라이드. 파일명 앞 숫자만 맞으면 되고 "
                         "확장자·뒤 설명은 자유입니다(003_뇌구조.png)."),

@@ -1,0 +1,34 @@
+{
+  "name": "260805-redesign",
+  "label": "블루 + 그린 (260805 리디자인)",
+  "note": "raw-layouttemplate/260805-레이아웃견본13종_템플릿리디자인.pptx 에서 뽑은 배색. Tailwind slate 계열 회색에 블루(#2E93D9)를 주색, 그린(#4CB782)을 보조색으로 쓴다.",
+  "font": "Noto Sans KR",
+  "source": "raw-layouttemplate/260805-레이아웃견본13종_템플릿리디자인.pptx",
+  "colors": {
+    "navy": "2E93D9",
+    "navy_75": "46A9C9",
+    "navy_55": "8FCDEC",
+    "navy_30": "CBD5E1",
+    "navy_12": "E2E8F0",
+    "chip": "DCEEF9",
+    "amber": "4CB782",
+    "amber_dk": "2E7D5B",
+    "amber_wash": "DDF3E7",
+    "ink": "334155",
+    "on_navy": "F1F5F9",
+    "white": "FFFFFF",
+    "navy_dk": "1B6FA8"
+  },
+  "_mapping": {
+    "navy": "제목·주요 채움 → 리디자인의 주색 블루 #2E93D9",
+    "amber": "강조 채움 → 리디자인의 보조색 그린 #4CB782",
+    "amber_dk": "그린 밴드 배경 #2E7D5B (흰글씨 5.0:1). 밝은 그린 #4CB782 는 2.5:1 로 글자가 안 읽힌다",
+    "chip": "요약칩·존 배경 → 연블루 워시 #DCEEF9 (면적 1위)",
+    "amber_wash": "강조 존 배경 → 연그린 워시 #DDF3E7 (면적 2위)",
+    "ink": "본문 글자 → slate-700 #334155 (가장 많이 쓰인 글자색)",
+    "navy_30": "비활성·대형 숫자 → slate-300 #CBD5E1",
+    "navy_12": "헤어라인 → slate-200 #E2E8F0",
+    "on_navy": "블루 위 보조 글자 → slate-50 #F1F5F9",
+    "navy_dk": "글자가 얹히는 밴드 배경 — 블루 #2E93D9 는 흰글씨 3.3:1 로 부족 → 밴드에만 진한 블루 5.4:1"
+  }
+}
