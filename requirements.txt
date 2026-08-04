@@ -1,0 +1,16 @@
+# 엔진 렌더 경로 최소 의존성 (Supertonic 3 · mp4maker)
+numpy>=1.26
+soundfile>=0.12.1
+onnxruntime>=1.17
+pyyaml>=6.0
+pydantic>=2.6
+pysrt>=1.1.2
+lxml>=5.2.0
+Pillow>=10.0
+
+# PPTX 추출·렌더 (Windows COM)
+python-pptx>=1.0
+pywin32>=306; sys_platform == "win32"
+
+# 대본 litellm 백엔드 (claude_cli 만 쓰면 불필요)
+httpx>=0.27

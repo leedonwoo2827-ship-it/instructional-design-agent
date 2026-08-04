@@ -1,0 +1,194 @@
+/* 발음 사전 편집 페이지 전용 스타일 */
+
+.pagenav {
+  margin-top: 8px;
+  font-size: 13px;
+}
+.pagenav a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.pagenav a:hover { text-decoration: underline; }
+
+.dict-notice {
+  margin: 12px 0 4px;
+  padding: 10px 14px;
+  background: #fffbea;
+  border: 1px solid #f4d36e;
+  border-left: 3px solid #d4a017;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #5a4500;
+}
+.dict-notice strong { display: inline-block; margin-right: 6px; }
+.dict-notice em { font-style: normal; font-weight: 600; color: #8a6500; }
+
+.dict-section {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+.dict-section h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dict-section .hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dict-section .hint code {
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+#previewInput {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  resize: vertical;
+}
+.preview-row {
+  margin-top: 8px;
+}
+.preview-output {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f5f7ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 6px;
+  font-size: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.preview-output.error-out {
+  background: #fff3f3;
+  border-color: #f8b4b4;
+  color: var(--error);
+}
+
+.count-badge {
+  display: inline-block;
+  background: #eef2ff;
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.add-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.add-row input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.add-row input:focus,
+#previewInput:focus,
+#searchInput:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+.search-row {
+  margin-bottom: 10px;
+}
+#searchInput {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.dict-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.dict-table thead th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--border);
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dict-table thead th:nth-child(3) { width: 80px; }
+.dict-table thead th:nth-child(1) { width: 200px; }
+.dict-table tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #eee;
+  vertical-align: middle;
+}
+.dict-table tbody td.empty {
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 16px;
+}
+.dict-table input.cell-edit {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: inherit;
+  background: transparent;
+}
+.dict-table input.cell-edit:hover {
+  border-color: #eee;
+  background: #fafafa;
+}
+.dict-table input.cell-edit:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: #fff;
+}
+.dict-table .key-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+.dict-table .row-saved { background: #ecfdf5 !important; transition: background 1.2s ease-out; }
+.dict-table .row-error { background: #fff3f3 !important; }
+
+.btn-del,
+.btn-save {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-del { color: var(--error); }
+.btn-del:hover { background: #fff3f3; border-color: #f8b4b4; }
+.btn-save { color: var(--accent); }
+.btn-save:hover { background: #eef2ff; border-color: #c7d2fe; }
+.btn-save:disabled { opacity: 0.4; cursor: default; }
+
+@media (max-width: 700px) {
+  .add-row { grid-template-columns: 1fr; }
+}
