@@ -1,59 +1,37 @@
 @echo off
-chcp 65001 >nul 2>nul
 setlocal
 cd /d "%~dp0"
 
-if not exist ".venv\Scripts\activate.bat" goto NOVENV
-call ".venv\Scripts\activate.bat"
+REM ==========================================================================
+REM  이론강의 영상 - 실행
+REM
+REM  교수설계 콘솔(FastAPI)을 띄운다. 영상 렌더는 이 서버가 엔진(.venv)을
+REM  별 프로세스로 불러서 하므로, 이 창을 닫아도 렌더는 계속된다.
+REM
+REM  이 파일은 CP949 로 저장해야 한다(cmd 가 콘솔 코드페이지로 읽는다).
+REM ==========================================================================
 
-rem Self-heal: the venv may predate the FastAPI switch (used to be Streamlit).
-rem Install on demand so run.bat works without remembering to re-run setup.bat.
-python -c "import fastapi, uvicorn" >nul 2>nul
-if errorlevel 1 goto INSTALL
-goto START
+if not exist ".venv-app\Scripts\python.exe" (
+  echo   [setup] 콘솔 가상환경이 없습니다. setup.bat 을 먼저 실행하세요.
+  pause
+  exit /b 1
+)
+if not exist ".venv\Scripts\python.exe" (
+  echo   [setup] 엔진 가상환경이 없습니다. setup.bat 을 먼저 실행하세요.
+  pause
+  exit /b 1
+)
 
-:INSTALL
-echo [setup] Installing server dependencies (first run after update)...
-python -m pip install -q --disable-pip-version-check -e .
-if errorlevel 1 goto INSTFAIL
-goto START
+set "PORT=8701"
+if not "%IDA_PORT%"=="" set "PORT=%IDA_PORT%"
 
-:START
-if "%IDA_PORT%"=="" set IDA_PORT=8701
 echo.
-echo ============================================
-echo  Instructional Design Agent
-echo  http://localhost:%IDA_PORT%
-echo  Press Ctrl+C to stop.
-echo ============================================
+echo   교수설계 가이드 에이전트   http://localhost:%PORT%
+echo   이 창을 닫으면 서버가 멈춥니다. 렌더 중이면 렌더는 계속됩니다.
 echo.
-rem The browser is opened by the server once it is actually listening.
-rem Opening it here raced the boot and showed ERR_CONNECTION_REFUSED.
-set IDA_OPEN_BROWSER=1
-python -m uvicorn server:app --host 127.0.0.1 --port %IDA_PORT%
-if errorlevel 1 goto RUNFAIL
-goto END
 
-:NOVENV
-echo.
-echo [error] .venv not found. Please run setup.bat first.
-echo.
-pause
-exit /b 1
-
-:INSTFAIL
-echo.
-echo [error] Dependency install failed. Run setup.bat and check the messages.
-echo.
-pause
-exit /b 1
-
-:RUNFAIL
-echo.
-echo [error] Server exited with an error. See the messages above.
-echo.
-pause
-exit /b 1
-
-:END
-pause
+set "IDA_OPEN_BROWSER=1"
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONUNBUFFERED=1"
+".venv-app\Scripts\python.exe" -m uvicorn server:app --host 127.0.0.1 --port %PORT%
+endlocal

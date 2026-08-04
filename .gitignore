@@ -1,37 +1,41 @@
+# ── 가상환경 ────────────────────────────────────────────────
+.venv/
+.venv-app/
+venv/
 __pycache__/
 *.pyc
 *.pyo
-.venv/
-venv/
+*.egg-info/
+
+# ── 용량 큰 자산 (별도 배포) ─────────────────────────────────
+# Supertonic 3 음성 모델 383MB
+vendor/chodangi/assets/
+# 슬라이드 폰트(Pretendard OFL) — setup 시 내려받는다
+assets/fonts/
+static/fonts/
+
+# ── 런타임 · 로컬 작업물 ────────────────────────────────────
 .env
 data/user_settings.json
 data/app.db
 data/app.db-wal
 data/app.db-shm
-.streamlit/secrets.toml
-.DS_Store
-*.egg-info/
+data/lectures.json
+# 엔진 스크래치(CLI 로 직접 돌릴 때). 앱 산출물은 IDA_WORKSPACE 로 저장소 밖에 나간다
+.engine-work/
+uploads/
 *.tmp.*
 
-# 회사 PPT 양식·로고(업로드) — 사내 자료, 커밋 금지
+# ── 사내 자료 · 원본 (커밋 금지) ────────────────────────────
+# 회사 PPT 양식 · 로고
 assets/*.pptx
 assets/*.potx
 assets/*.png
 assets/*.jpg
-
-# 생성 산출물(교재·PPT·강의계획서 등) — 커밋 금지
-_assets/
-
-# 주차별 산출물 아카이브(01/ 02/ … 15/) — 로컬 전용
-workspace/
-
-# 슬라이드 폰트(Pretendard OFL) — 용량이 커 커밋 제외. setup 시 내려받는다
-assets/fonts/
-static/fonts/
-
-# 원본 첨삭 자료·작업용 샘플 — 내부용, 커밋 금지 (반영 결과는 skills/·docs/에 반영)
+# 첨삭 원본 · 작업 샘플 (반영 결과는 skills/ · docs/ 에 있다)
+_context/
 _guideline/
 _guide-260710/
+_assets/
 
-# 사내 자료·원본·키 포함 — GitHub 업로드 금지
-_context/
+.DS_Store
