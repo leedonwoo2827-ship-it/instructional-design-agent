@@ -1,3 +1,11 @@
-# 배치 파일은 CRLF 여야 한다. LF 면 cmd.exe 가 () 블록을 잘못 파싱한다.
-*.bat text eol=crlf
-*.sh  text eol=lf
+# .bat 은 CP949 + CRLF 다. git 이 줄바꿈을 건드리면 cmd.exe 가 인수를 못 읽어
+# 서버가 안 뜬다(전례 있음). 바이트를 그대로 보존한다.
+*.bat -text
+
+# 나머지는 작업 트리에서 CRLF, 저장소에는 LF
+* text=auto
+*.pptx binary
+*.png binary
+*.jpg binary
+*.mp4 binary
+*.wav binary
