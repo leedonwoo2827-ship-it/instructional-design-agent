@@ -151,5 +151,14 @@ setup.bat / run.bat    Windows 설치·실행 (setup.sh / run.sh: mac·linux)
 ## 설정 우선순위
 `data/user_settings.json`(워크스페이스 저장값) > `.env` 환경변수 > 코드 기본값
 
+### 산출물을 저장소 밖에 두기
+주차별 산출물을 다른 드라이브·폴더에 모으려면 `.env` 에 절대경로를 지정합니다.
+비우면 저장소 안의 `workspace/` 를 씁니다. **어느 쪽이든 커밋에는 포함되지 않습니다.**
+
+```
+IDA_WORKSPACE=D:\00work\_산출물\교수설계
+IDA_DB_PATH=D:\00work\_산출물\교수설계\app.db      # 선택
+```
+
 ## 문의
 fedu@ubion.co.kr
