@@ -1,10 +1,11 @@
 [project]
 name = "instructional-design-agent"
 version = "0.1.0"
-description = "교수설계 가이드 에이전트 — 강의계획서/원고 설계 (Streamlit, Ubion LiteLLM proxy)"
+description = "교수설계 가이드 에이전트 — 강의계획서/교재/슬라이드 설계 (FastAPI 로컬 콘솔, Ubion LiteLLM proxy)"
 requires-python = ">=3.10,<3.14"
 dependencies = [
-  "streamlit>=1.40",
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
   "openai>=1.50",
   "python-dotenv>=1.0",
   "markdown>=3.6",

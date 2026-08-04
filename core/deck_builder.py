@@ -1,51 +1,128 @@
 # -*- coding: utf-8 -*-
 """디자인 슬라이드 빌더 — 슬라이드플랜(JSON) → 디자인된 .pptx 바이트.
 
-애프터 덱(_guideline/after-...이미지·레이아웃정리.pptx)에서 실측한 네이비+앰버 디자인
-시스템을 코드로 재현한다. 회사 템플릿을 베이스로 열어(테마·마스터·로고 상속) 예시
-슬라이드를 비우고, 모든 슬라이드를 Blank 레이아웃에 도형으로 직접 배치한다.
+네이비(#1E2761) + 앰버(#F2A900) 디자인 시스템. 회사 템플릿을 베이스로 열어
+(테마·마스터·로고 상속) 예시 슬라이드를 비우고, 모든 슬라이드를 Blank 레이아웃에
+도형으로 직접 배치한다.
 
-타입: cover / section / photo / process / cards / compare / table / bullets
+타입: cover / section / photo / bullets / process / cards / compare / table
+      / quiz / objectives / agenda / closing / stat
 python-pptx 미설치 시 build_deck 은 None 을 돌려준다(그레이스풀).
+
+디자인 규칙(docs/디자인-토큰.md 참고)
+  · 색은 네이비 단일 계조 + 앰버 1점. 무지개 로테이션 금지.
+  · 앰버는 채움·마커 전용. 흰 배경 위 본문 텍스트 색으로 쓰지 않는다(대비 2.0:1).
+  · 그림자는 사진·카드·비교 컬럼에만. 칩·바탕 도형은 평면.
+  · 모든 본문은 _fit() 을 거쳐 박스를 넘지 않는다.
 """
 from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import re
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-# ── 디자인 토큰(애프터 실측) ─────────────────────────────────────────────
-FONT = "맑은 고딕"
+from core import pptx_font
+
+# ── 캔버스 ────────────────────────────────────────────────────────────────
 SLIDE_W, SLIDE_H = 13.33, 7.5
 MARGIN = 0.6
-CONTENT_W = 12.13  # 전폭 콘텐츠
+CONTENT_W = 12.13                      # 전폭 콘텐츠
+CONTENT_R = MARGIN + CONTENT_W         # 우측 끝 12.73
 
+ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+
+# ── 색 — 네이비 단일 계조 + 앰버 ───────────────────────────────────────────
 _HEX = {
-    "navy": (0x1E, 0x27, 0x61),
-    "navy_dk": (0x1B, 0x22, 0x52),
-    "navy_dk2": (0x22, 0x2B, 0x63),
-    "amber": (0xF2, 0xA9, 0x00),
-    "chip": (0xEE, 0xF2, 0xFB),
-    "teal": (0x2E, 0x7D, 0x8A),
-    "white": (0xFF, 0xFF, 0xFF),
-    "grey": (0x44, 0x49, 0x57),
-    "sub": (0xCA, 0xDC, 0xFC),
-    # 도형 구분용 — 서로 뚜렷이 구별되며 흰 글씨가 읽히는 중간톤
-    "blue": (0x2F, 0x6F, 0xD6),
-    "green": (0x2F, 0x7D, 0x4F),
-    "plum": (0x6B, 0x4E, 0x8E),
+    "navy":     (0x1E, 0x27, 0x61),   # 제목·주요 채움 (흰 글씨 OK)
+    "navy_75":  (0x56, 0x5D, 0x88),   # 2단계
+    "navy_55":  (0x83, 0x88, 0xA8),   # 3단계·키커·캡션
+    "navy_30":  (0xBB, 0xBE, 0xD0),   # 비활성·대형 숫자
+    "navy_12":  (0xE4, 0xE5, 0xEC),   # 헤어라인 링
+    "chip":     (0xEE, 0xF2, 0xFB),   # 요약칩·존 배경
+    "amber":    (0xF2, 0xA9, 0x00),   # 마커·강조 채움 (텍스트 금지)
+    "amber_dk": (0xB5, 0x7F, 0x00),   # 앰버 계열 텍스트가 꼭 필요할 때
+    "amber_wash": (0xFD, 0xF3, 0xDC),  # 강조 존 배경
+    "ink":      (0x2B, 0x34, 0x40),   # 본문 글자
+    "on_navy":  (0xA9, 0xB0, 0xCE),   # 네이비 위 보조 글자
+    "white":    (0xFF, 0xFF, 0xFF),
 }
 
-# 프로세스 노드 / 카드 뱃지 색 로테이션 — 인접 노드가 확실히 구분되도록
-_NODE_ROT = ("navy", "teal", "blue", "plum", "green")
-_BADGE_ROT = ("navy", "teal", "blue", "plum")
+# 순서 있는 것(process)·병렬(cards) 모두 단일 계조. 무지개 금지.
+_RAMP = ("navy", "navy_75", "navy_55", "navy_30")
+
+# ── 타이포 스케일 ─────────────────────────────────────────────────────────
+#   size(pt) / weight(r|sb|b) / color / spc(em 자간) / line(행간)
+TYPE = {
+    "kicker":      dict(size=11.0, weight="sb", color="navy_55", spc=0.14),
+    "kicker_on":   dict(size=11.0, weight="sb", color="on_navy", spc=0.14),
+    "cover_title": dict(size=40.0, weight="b",  color="navy", spc=-0.025, line=1.14),
+    "cover_sub":   dict(size=17.0, weight="r",  color="navy_55", line=1.35),
+    "sec_title":   dict(size=32.0, weight="b",  color="navy", spc=-0.02, line=1.18),
+    "title":       dict(size=28.0, weight="b",  color="navy", spc=-0.02, line=1.16),
+    "chip":        dict(size=15.0, weight="sb", color="navy", line=1.25),
+    "bullet":      dict(size=15.0, weight="r",  color="ink", line=1.42),
+    "bullet2":     dict(size=13.0, weight="r",  color="navy_55", line=1.40),
+    "card_label":  dict(size=15.5, weight="sb", color="navy", line=1.20),
+    "card_desc":   dict(size=12.5, weight="r",  color="ink", line=1.38),
+    "node_label":  dict(size=14.5, weight="sb", color="white", line=1.18),
+    "node_desc":   dict(size=11.0, weight="r",  color="ink", line=1.30),
+    "th":          dict(size=12.0, weight="sb", color="white"),
+    "td":          dict(size=11.5, weight="r",  color="ink", line=1.30),
+    "caption":     dict(size=9.5,  weight="r",  color="navy_55"),
+    "footer":      dict(size=9.5,  weight="r",  color="navy_55"),
+    "pageno":      dict(size=10.0, weight="sb", color="navy_30"),
+    "big_num":     dict(size=34.0, weight="b",  color="navy_30", spc=-0.02),
+    "sec_num":     dict(size=96.0, weight="b",  color="navy_12", spc=-0.03),
+    "stat_num":    dict(size=52.0, weight="b",  color="navy", spc=-0.03),
+    "answer":      dict(size=13.0, weight="sb", color="navy"),
+}
+
+# ── 세로 그리드 ───────────────────────────────────────────────────────────
+KICKER_Y = 0.52
+TITLE_Y, TITLE_H = 0.80, 0.94
+RULE_Y, RULE_W, RULE_H = 1.66, 0.62, 0.05
+CHIP_Y, CHIP_H = 1.88, 0.86
+BODY_TOP = 2.95          # 콘텐츠 상단 기준선
+BODY_BOTTOM = 6.62       # 콘텐츠 하단 한계
+FOOT_LINE_Y = 6.90       # 러닝 헤어라인
+FOOT_TEXT_Y = 6.98
+
+# 표준 시각 반경(인치)
+R_CARD = 0.10
+R_PHOTO = 0.10
+
+# 현재 빌드의 폰트 세트(build_deck 진입 시 설정)
+_FS = pptx_font.SYSTEM_SET
+
+
+def _log(msg: str) -> None:
+    """콘솔 코드페이지(cp949 등)에 없는 글자로 로그가 죽지 않게 한다.
+
+    렌더 함수 안에서 print 가 UnicodeEncodeError 를 던지면 build_deck 의
+    try/except 가 이를 렌더 실패로 오인해 폴백시킨다 — 실제로 겪은 문제.
+    """
+    try:
+        print(msg, flush=True)
+    except Exception:  # noqa: BLE001
+        try:
+            enc = getattr(getattr(__import__("sys"), "stdout", None), "encoding",
+                          None) or "ascii"
+            print(msg.encode(enc, "replace").decode(enc, "replace"), flush=True)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _rgb(name):
     from pptx.dml.color import RGBColor
     return RGBColor(*_HEX[name])
+
+
+def _hexstr(name: str) -> str:
+    return "%02X%02X%02X" % _HEX[name]
 
 
 # ── 저수준 헬퍼 ───────────────────────────────────────────────────────────
@@ -92,58 +169,99 @@ def _no_deco(shape):
         pass
 
 
-def _rrect(slide, x, y, w, h, fill=None, radius=None, line=None, line_w=None):
+def _adj(radius_in: float, w: float, h: float) -> int:
+    """시각 반경(inch)을 roundRect adj 값으로. 도형 크기가 달라도 라운드가 같아진다."""
+    base = max(min(w, h), 0.01)
+    return int(max(0.0, min(radius_in / base, 0.5)) * 100000)
+
+
+def _set_adj(shape, val: int) -> None:
+    from pptx.oxml.ns import qn
+    geom = shape._element.spPr.find(qn("a:prstGeom"))
+    if geom is None:
+        return
+    av = geom.find(qn("a:avLst"))
+    if av is None:
+        av = geom.makeelement(qn("a:avLst"), {})
+        geom.append(av)
+    for gd in list(av):
+        av.remove(gd)
+    gd = av.makeelement(qn("a:gd"), {"name": "adj", "fmla": f"val {val}"})
+    av.append(gd)
+
+
+def _shadow(shape, *, blur=0.14, dist=0.035, alpha=12, color="navy") -> None:
+    """부드러운 아래 방향 그림자. 사진·카드·비교 컬럼에만 쓴다."""
+    from pptx.oxml.ns import qn
+    try:
+        spPr = shape._element.spPr
+        for el in spPr.findall(qn("a:effectLst")):
+            spPr.remove(el)
+        eff = spPr.makeelement(qn("a:effectLst"), {})
+        shd = eff.makeelement(qn("a:outerShdw"), {
+            "blurRad": str(int(blur * 914400)),
+            "dist": str(int(dist * 914400)),
+            "dir": "5400000", "rotWithShape": "0"})
+        clr = shd.makeelement(qn("a:srgbClr"), {"val": _hexstr(color)})
+        clr.append(clr.makeelement(qn("a:alpha"), {"val": str(int(alpha * 1000))}))
+        shd.append(clr)
+        eff.append(shd)
+        spPr.append(eff)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _rect(slide, x, y, w, h, fill):
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+    shp = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                 Inches(x), Inches(y), Inches(w), Inches(h))
+    _no_deco(shp)
+    shp.fill.solid()
+    shp.fill.fore_color.rgb = _rgb(fill)
+    return shp
+
+
+def _rrect(slide, x, y, w, h, fill=None, radius=R_CARD, line=None, line_w=None,
+           pill=False):
+    """라운드 사각형. radius 는 '인치 단위 시각 반경'(비율 아님). pill=True 면 알약."""
     from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Inches, Pt
-    from pptx.oxml.ns import qn
     shp = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
                                  Inches(x), Inches(y), Inches(w), Inches(h))
     _no_deco(shp)
     if fill is not None:
-        shp.fill.solid(); shp.fill.fore_color.rgb = _rgb(fill)
+        shp.fill.solid()
+        shp.fill.fore_color.rgb = _rgb(fill)
     else:
         shp.fill.background()
     if line is not None:
         shp.line.color.rgb = _rgb(line)
         shp.line.width = Pt(line_w or 1.0)
-    if radius is not None:
-        geom = shp._element.spPr.find(qn("a:prstGeom"))
-        if geom is not None:
-            av = geom.find(qn("a:avLst"))
-            if av is None:
-                av = geom.makeelement(qn("a:avLst"), {}); geom.append(av)
-            for gd in list(av):
-                av.remove(gd)
-            gd = av.makeelement(qn("a:gd"), {"name": "adj", "fmla": f"val {int(radius*100000)}"})
-            av.append(gd)
+    _set_adj(shp, 50000 if pill else _adj(radius, w, h))
     return shp
 
 
 def _oval(slide, x, y, d, fill):
     from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Inches
-    shp = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(d), Inches(d))
+    shp = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y),
+                                 Inches(d), Inches(d))
     _no_deco(shp)
-    shp.fill.solid(); shp.fill.fore_color.rgb = _rgb(fill)
-    return shp
-
-
-def _diamond(slide, x, y, w, h, fill="amber"):
-    from pptx.enum.shapes import MSO_SHAPE
-    from pptx.util import Inches
-    shp = slide.shapes.add_shape(MSO_SHAPE.DIAMOND, Inches(x), Inches(y), Inches(w), Inches(h))
-    _no_deco(shp)
-    shp.fill.solid(); shp.fill.fore_color.rgb = _rgb(fill)
+    shp.fill.solid()
+    shp.fill.fore_color.rgb = _rgb(fill)
     return shp
 
 
 def _arrow(slide, x, y, w, h, fill="amber"):
-    """단계·순서 연결자(다이아몬드 대신 화살표) — 첨삭 반영."""
+    """단계·순서 연결자."""
     from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Inches
-    shp = slide.shapes.add_shape(MSO_SHAPE.RIGHT_ARROW, Inches(x), Inches(y), Inches(w), Inches(h))
+    shp = slide.shapes.add_shape(MSO_SHAPE.RIGHT_ARROW, Inches(x), Inches(y),
+                                 Inches(w), Inches(h))
     _no_deco(shp)
-    shp.fill.solid(); shp.fill.fore_color.rgb = _rgb(fill)
+    shp.fill.solid()
+    shp.fill.fore_color.rgb = _rgb(fill)
     return shp
 
 
@@ -160,21 +278,15 @@ def _text(slide, x, y, w, h, anchor="t"):
     return tf
 
 
-def _run(p, text, size, color, bold=False, font=FONT):
-    from pptx.util import Pt
-    r = p.add_run(); r.text = text
-    r.font.size = Pt(size); r.font.bold = bold; r.font.name = font
-    r.font.color.rgb = _rgb(color)
-    return r
-
-
 def _para(tf, first, align=None, space_after=4, line=1.05):
     from pptx.util import Pt
     from pptx.enum.text import PP_ALIGN
     p = tf.paragraphs[0] if first else tf.add_paragraph()
     if align:
-        p.alignment = {"c": PP_ALIGN.CENTER, "l": PP_ALIGN.LEFT, "r": PP_ALIGN.RIGHT}[align]
-    p.space_after = Pt(space_after); p.space_before = Pt(0)
+        p.alignment = {"c": PP_ALIGN.CENTER, "l": PP_ALIGN.LEFT,
+                       "r": PP_ALIGN.RIGHT}[align]
+    p.space_after = Pt(space_after)
+    p.space_before = Pt(0)
     try:
         p.line_spacing = line
     except Exception:  # noqa: BLE001
@@ -182,52 +294,187 @@ def _para(tf, first, align=None, space_after=4, line=1.05):
     return p
 
 
-# 제목·칩 세로 위치(v2 반영: 제목을 위에서 살짝 내리고 로고 피해 폭 축소)
-TITLE_Y, TITLE_H, TITLE_W, TITLE_SZ = 0.7, 1.0, 10.6, 27
-CHIP_Y = 1.82
+def _run(p, text, size, color, weight="r", spc=0.0):
+    from pptx.util import Pt
+    r = p.add_run()
+    r.text = str(text)
+    r.font.size = Pt(size)
+    r.font.bold = _FS.is_bold(weight)
+    r.font.color.rgb = _rgb(color)
+    pptx_font.apply_face(r, _FS.face(weight), spc_em=spc, size_pt=size)
+    return r
 
 
-# ── 구성 요소 ─────────────────────────────────────────────────────────────
-def add_title(slide, text):
-    tf = _text(slide, MARGIN, TITLE_Y, TITLE_W, TITLE_H, anchor="m")
-    _run(_para(tf, True), text or "", TITLE_SZ, "navy", bold=True)
+def _T(p, text, role, *, size=None, color=None, weight=None, spc=None):
+    """TYPE 롤로 런 추가. 개별 인자로 덮어쓸 수 있다."""
+    t = TYPE[role]
+    return _run(p, text,
+                t["size"] if size is None else size,
+                t["color"] if color is None else color,
+                t["weight"] if weight is None else weight,
+                t.get("spc", 0.0) if spc is None else spc)
 
 
-def add_chip(slide, text, x=MARGIN, y=CHIP_Y, w=CONTENT_W, emphasis=False):
-    """요약칩: 배경 라운드 + 앰버 점 + 굵은 한 문장. 반환=칩 하단 y.
-
-    emphasis=True(문제/질문/목표/퀴즈)면 네이비 배경+흰 글씨로 강조.
-    """
-    if not text:
-        return y
-    h = 0.9
-    _rrect(slide, x, y, w, h, fill=("navy" if emphasis else "chip"), radius=0.5)
-    _oval(slide, x + 0.18, y + 0.36, 0.18, "amber")
-    tf = _text(slide, x + 0.5, y, w - 0.7, h, anchor="m")
-    _run(_para(tf, True, line=1.1), text, 15, ("white" if emphasis else "navy"), bold=True)
-    return y + h
-
-
-def _hang(p, marL_in=0.23):
-    """문단에 내어쓰기(hanging indent): ▸는 왼쪽으로 튀고 줄바꿈 글자는 텍스트 아래 정렬."""
+def _hang(p, marL_in=0.24):
+    """내어쓰기 — ▸ 는 왼쪽으로 튀고 줄바꿈 글자는 텍스트 아래로 정렬."""
     emu = str(int(marL_in * 914400))
     pPr = p._p.get_or_add_pPr()
     pPr.set("marL", emu)
     pPr.set("indent", "-" + emu)
 
 
-def add_bullets(slide, bullets, x, y, w, h, size=15):
+# ── 텍스트 오버플로 보호 ───────────────────────────────────────────────────
+def _measure(text: str, pt: float) -> float:
+    """문자열의 근사 렌더 폭(inch). 한글·전각 1.0em, 라틴 0.54em, 공백 0.28em."""
+    em = pt / 72.0
+    w = 0.0
+    for ch in str(text):
+        o = ord(ch)
+        if ch == " ":
+            w += 0.28
+        elif (0x1100 <= o <= 0x11FF or 0x2E80 <= o <= 0xA4CF
+              or 0xAC00 <= o <= 0xD7A3 or 0xF900 <= o <= 0xFAFF
+              or 0xFF00 <= o <= 0xFF60):
+            w += 1.0
+        elif ch.isdigit() or ch.isupper():
+            w += 0.58
+        else:
+            w += 0.52
+    return w * em
+
+
+def _needed_h(lines: List[str], box_w: float, pt: float, line: float,
+              space_after: float) -> float:
+    """문단들이 차지할 높이(inch) 추정."""
+    usable = max(box_w - 0.12, 0.4)
+    rows = 0
+    for t in lines:
+        rows += max(1, math.ceil(_measure(t, pt) / usable - 1e-6))
+    return rows * (pt / 72.0) * line + len(lines) * (space_after / 72.0)
+
+
+def _fit(lines: List[str], box_w: float, box_h: float, base_pt: float,
+         line: float = 1.4, space_after: float = 0.0,
+         min_pt: float = 10.5, label: str = "") -> float:
+    """박스에 들어가는 최대 폰트 크기(0.5pt 단위). 최소치에서도 넘치면 경고."""
+    if not lines:
+        return base_pt
+    pt = base_pt
+    while pt > min_pt:
+        if _needed_h(lines, box_w, pt, line, space_after) <= box_h:
+            return pt
+        pt -= 0.5
+    if _needed_h(lines, box_w, min_pt, line, space_after) > box_h and label:
+        _log(f"[deck] 넘침 경고: {label} — {min_pt}pt 로도 박스를 초과")
+    return min_pt
+
+
+def _fit_each(items: List[str], box_w: float, box_h: float, base_pt: float,
+              line: float = 1.3, min_pt: float = 10.5, label: str = "") -> float:
+    """항목마다 '자기 박스'를 갖는 레이아웃용 — 가장 빡빡한 항목에 맞춘 공통 크기.
+
+    _fit() 은 여러 문단이 한 박스에 쌓이는 경우(불릿 목록)를 가정하므로,
+    목차·보기·표 셀처럼 항목별 박스가 따로인 곳에 쓰면 높이를 과대 계산한다.
+    """
+    vals = [str(t) for t in items if str(t).strip()]
+    if not vals:
+        return base_pt
+    return min(_fit([v], box_w, box_h, base_pt, line, 0.0, min_pt, label)
+               for v in vals)
+
+
+def _trim_to_fit(lines: List[str], box_w: float, box_h: float, pt: float,
+                 line: float, space_after: float, label: str = "") -> List[str]:
+    """최소 크기에서도 안 들어가면 뒤에서부터 항목을 덜어낸다(조용히 자르지 않고 경고)."""
+    out = list(lines)
+    while len(out) > 1 and _needed_h(out, box_w, pt, line, space_after) > box_h:
+        dropped = out.pop()
+        _log(f"[deck] 항목 제외: {label} — '{str(dropped)[:24]}…'")
+    return out
+
+
+def _normautofit(tf, scale: float = 1.0, lnspc_red: float = 0.0) -> None:
+    """<a:normAutofit> 주입 — PowerPoint 가 편집 시 다시 맞추도록 하는 보조 장치."""
+    from pptx.oxml.ns import qn
+    try:
+        bodyPr = tf._txBody.find(qn("a:bodyPr"))
+        if bodyPr is None:
+            return
+        for tag in ("a:normAutofit", "a:spAutoFit", "a:noAutofit"):
+            el = bodyPr.find(qn(tag))
+            if el is not None:
+                bodyPr.remove(el)
+        naf = bodyPr.makeelement(qn("a:normAutofit"), {})
+        if scale < 1.0:
+            naf.set("fontScale", str(int(scale * 100000)))
+        if lnspc_red > 0:
+            naf.set("lnSpcReduction", str(int(lnspc_red * 100000)))
+        bodyPr.append(naf)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ── 구성 요소 ─────────────────────────────────────────────────────────────
+def add_kicker(slide, text, x=MARGIN, y=KICKER_Y, w=8.0, color=None):
+    if not text:
+        return
+    tf = _text(slide, x, y, w, 0.24, anchor="m")
+    _T(_para(tf, True), str(text).upper(), "kicker", color=color)
+
+
+def add_title(slide, text, *, has_logo=False, y=TITLE_Y, size=None):
+    w = 10.6 if has_logo else CONTENT_W
+    t = TYPE["title"]
+    pt = size or _fit([text or ""], w, TITLE_H, t["size"], t["line"],
+                      min_pt=19, label=f"title:{str(text)[:18]}")
+    tf = _text(slide, MARGIN, y, w, TITLE_H, anchor="m")
+    _T(_para(tf, True, line=t["line"]), text or "", "title", size=pt)
+
+
+def add_rule(slide, y=RULE_Y, x=MARGIN, w=RULE_W, color="amber"):
+    _rrect(slide, x, y, w, RULE_H, fill=color, pill=True)
+
+
+def add_chip(slide, text, x=MARGIN, y=CHIP_Y, w=CONTENT_W, emphasis=False):
+    """요약칩: 라운드 배경 + 앰버 점 + 한 문장. 반환 = 칩 하단 y."""
+    if not text:
+        return y
+    t = TYPE["chip"]
+    inner_w = w - 0.78
+    pt = _fit([text], inner_w, CHIP_H - 0.16, t["size"], t["line"],
+              min_pt=11.5, label=f"chip:{str(text)[:18]}")
+    _rrect(slide, x, y, w, CHIP_H, fill=("navy" if emphasis else "chip"), pill=True)
+    _oval(slide, x + 0.26, y + CHIP_H / 2 - 0.09, 0.18, "amber")
+    tf = _text(slide, x + 0.58, y, inner_w, CHIP_H, anchor="m")
+    _T(_para(tf, True, line=t["line"]), text, "chip", size=pt,
+       color=("white" if emphasis else "navy"))
+    return y + CHIP_H
+
+
+def add_bullets(slide, bullets, x, y, w, h, *, role="bullet", marker=True,
+                label=""):
     if not bullets:
         return
+    t = TYPE[role]
+    items = [str(b) for b in bullets if str(b).strip()]
+    if not items:
+        return
+    sa = 7.0
+    # 마커 폭(▸ + 공백)만큼 텍스트 폭이 줄어든다
+    eff_w = w - (0.26 if marker else 0.0)
+    pt = _fit(items, eff_w, h, t["size"], t["line"], sa, min_pt=11, label=label)
+    items = _trim_to_fit(items, eff_w, h, pt, t["line"], sa, label=label)
     tf = _text(slide, x, y, w, h, anchor="t")
-    for i, b in enumerate(bullets):
-        p = _para(tf, i == 0, space_after=8, line=1.15)
-        _hang(p)
-        _run(p, "▸ ", size, "amber", bold=True)
-        _run(p, str(b), size, "grey", bold=False)
+    for i, b in enumerate(items):
+        p = _para(tf, i == 0, space_after=sa, line=t["line"])
+        if marker:
+            _hang(p)
+            _run(p, "▸ ", pt, "amber", "sb")
+        _T(p, b, role, size=pt)
+    _normautofit(tf, scale=min(1.0, pt / t["size"]))
 
 
-def add_photo(slide, data, x=8.25, y=1.7, w=4.5, h=4.31):
+def add_photo(slide, data, x, y, w, h, *, credit=None):
     from pptx.util import Inches
     from pptx.oxml.ns import qn
     try:
@@ -241,26 +488,38 @@ def add_photo(slide, data, x=8.25, y=1.7, w=4.5, h=4.31):
         iw, ih = Image.open(io.BytesIO(data)).size
         tgt, src = w / h, iw / ih
         if src > tgt:
-            c = (1 - tgt / src) / 2; pic.crop_left = c; pic.crop_right = c
+            c = (1 - tgt / src) / 2
+            pic.crop_left = c
+            pic.crop_right = c
         elif src < tgt:
-            c = (1 - src / tgt) / 2; pic.crop_top = c; pic.crop_bottom = c
+            c = (1 - src / tgt) / 2
+            pic.crop_top = c
+            pic.crop_bottom = c
     except Exception:  # noqa: BLE001
         pass
     geom = pic._element.spPr.find(qn("a:prstGeom"))
     if geom is not None:
         geom.set("prst", "roundRect")
+        _set_adj(pic, _adj(R_PHOTO, w, h))
+    _shadow(pic, blur=0.16, dist=0.04, alpha=14)
+    if credit:
+        tf = _text(slide, x, y + h + 0.04, w, 0.22, anchor="t")
+        _T(_para(tf, True, align="r"), str(credit)[:90], "caption")
     return pic
 
 
-def add_footer_key(slide, text, y=5.75):
+def add_footer_key(slide, text, y=None):
+    """하단 '핵심' 한 줄. 러닝 푸터 위쪽에 놓인다."""
     if not text:
         return
-    h = 0.62
-    _rrect(slide, MARGIN, y, CONTENT_W, h, fill="chip", radius=0.3)
-    tf = _text(slide, MARGIN + 0.3, y, CONTENT_W - 0.5, h, anchor="m")
+    h = 0.60
+    y = BODY_BOTTOM - h if y is None else y
+    _rrect(slide, MARGIN, y, CONTENT_W, h, fill="amber_wash", radius=R_CARD)
+    _rrect(slide, MARGIN, y, 0.08, h, fill="amber", radius=0.04)
+    tf = _text(slide, MARGIN + 0.34, y, CONTENT_W - 0.6, h, anchor="m")
     p = _para(tf, True)
-    _run(p, "핵심  ", 14, "amber", bold=True)
-    _run(p, text, 14, "navy", bold=True)
+    _run(p, "핵심   ", 12.5, "amber_dk", "sb")
+    _run(p, text, 13.5, "navy", "sb")
 
 
 def add_logo(slide, logo_path):
@@ -274,204 +533,589 @@ def add_logo(slide, logo_path):
         pass
 
 
-# ── 타입별 렌더 ───────────────────────────────────────────────────────────
-def render_cover(slide, s):
-    _oval(slide, 9.6, -1.6, 5.6, "navy_dk")
-    _oval(slide, 10.8, 3.6, 3.4, "navy_dk2")
-    _rrect(slide, MARGIN, 2.15, 0.9, 0.9, fill="amber", radius=0.3)
-    tf = _text(slide, MARGIN, 3.25, 10.8, 1.7, anchor="m")
-    _run(_para(tf, True), s.get("title", "강의 슬라이드"), 40, "navy", bold=True)
-    sub = s.get("chip") or s.get("subtitle") or ""
-    if sub:
-        tf2 = _text(slide, MARGIN, 4.75, 11.0, 0.7)
-        _run(_para(tf2, True), sub, 18, "navy", bold=False)
+def add_running(slide, footer_text: str, page: Optional[int]):
+    """러닝 요소 — 헤어라인 + 좌측 과목·주차 + 우측 페이지 번호."""
+    if not footer_text and page is None:
+        return
+    _rect(slide, MARGIN, FOOT_LINE_Y, CONTENT_W, 0.01, "navy_12")
+    if footer_text:
+        tf = _text(slide, MARGIN, FOOT_TEXT_Y, 9.0, 0.28, anchor="m")
+        _T(_para(tf, True), footer_text, "footer")
+    if page is not None:
+        tf = _text(slide, CONTENT_R - 1.2, FOOT_TEXT_Y, 1.2, 0.28, anchor="m")
+        _T(_para(tf, True, align="r"), str(page), "pageno")
 
 
-def render_section(slide, s):
-    _rrect(slide, MARGIN, 3.15, 0.16, 1.2, fill="amber", radius=0.5)
-    tf = _text(slide, MARGIN + 0.4, 3.0, CONTENT_W - 0.4, 1.5, anchor="m")
-    _run(_para(tf, True), s.get("title", ""), 34, "navy", bold=True)
-    if s.get("chip"):
-        tf2 = _text(slide, MARGIN + 0.4, 4.5, CONTENT_W - 0.4, 0.8)
-        _run(_para(tf2, True), s["chip"], 16, "grey", bold=False)
+def _head(slide, s, *, has_logo=False, rule=True):
+    """상단 존(키커 → 제목 → 앰버 룰) 공통 처리. 반환 = 칩 시작 y."""
+    add_kicker(slide, s.get("kicker"))
+    add_title(slide, s.get("title", ""), has_logo=has_logo)
+    if rule:
+        add_rule(slide)
+    return CHIP_Y
 
 
-# 사진 배치 프리셋(v2 실측): 슬라이드마다 순환해 크기·위치를 다양화.
-# img=(L,T,W,H), tx/tw=텍스트(칩·본문) 열, below=이미지가 하단(본문은 위 전폭).
-# 세로형(2.83폭)은 가로 사진을 잘라먹어 제거 — 정사각/가로형/하단와이드만 사용(첨삭 반영).
+# ── 사진 배치 프리셋 ───────────────────────────────────────────────────────
+# img=(L,T,W,H), tx/tw=텍스트 열, below=이미지가 하단(본문은 위 전폭).
+# 사진 슬라이드 '순번'으로 순환한다(절대 인덱스 아님) — 배치 반복 방지.
+#
+# 세로 기준(첨삭 2026-08-03): 옆단 사진은 **요약칩 윗선(1.88")에 top 을 맞추고**
+# 콘텐츠 하단(6.57")까지 내린다. 본문 시작선(2.95")에서 시작하면 칩 옆이 비어
+# 위쪽이 헐거워 보인다. 폭만 바꿔 변화를 준다(높이를 줄이면 정렬이 깨진다).
+PHOTO_TOP = CHIP_Y          # 1.88 — 요약칩 윗선
+PHOTO_BOT = 6.57            # 콘텐츠 하단(러닝 푸터 위)
+_PH = PHOTO_BOT - PHOTO_TOP  # 4.69
+
 PHOTO_PRESETS = [
-    {"img": (8.15, 2.5, 4.15, 4.15), "tx": 0.6, "tw": 7.3},                 # 우측 정사각
-    {"img": (0.5, 2.5, 4.15, 4.15), "tx": 4.95, "tw": 7.85},               # 좌측 정사각(텍스트 우)
-    {"img": (8.0, 2.75, 4.8, 3.2), "tx": 0.6, "tw": 7.1},                  # 우측 가로형
-    {"img": (0.5, 2.75, 4.8, 3.2), "tx": 5.5, "tw": 7.3},                  # 좌측 가로형(텍스트 우)
-    {"img": (9.08, 2.7, 3.75, 3.75), "tx": 0.6, "tw": 8.2},                # 우측 중간 정사각
-    {"img": (2.7, 4.75, 7.9, 2.35), "tx": 0.6, "tw": 12.1, "below": True}, # 하단 와이드(텍스트 위 전폭)
+    {"img": (8.55, PHOTO_TOP, 4.18, _PH), "tx": 0.60, "tw": 7.60},  # 우측 표준
+    {"img": (0.60, PHOTO_TOP, 4.18, _PH), "tx": 5.13, "tw": 7.60},  # 좌측 표준
+    {"img": (7.95, PHOTO_TOP, 4.78, _PH), "tx": 0.60, "tw": 7.00},  # 우측 넓게
+    {"img": (0.60, PHOTO_TOP, 4.78, _PH), "tx": 5.72, "tw": 7.01},  # 좌측 넓게
+    {"img": (8.20, PHOTO_TOP, 4.53, _PH), "tx": 0.60, "tw": 7.25},  # 우측 중간
+    {"img": (2.60, 4.40, 8.13, 2.22), "tx": 0.60, "tw": 12.13,
+     "below": True},                                                # 하단 와이드
 ]
 
 
-def render_photo(slide, s, img):
-    add_title(slide, s.get("title", ""))
+# ── 타입별 렌더 ───────────────────────────────────────────────────────────
+def render_cover(slide, s, img=None):
+    """좌측 네이비 밴드 + 앰버 룰 + 우측 타이틀 존."""
+    band_w = 4.75
+    _rect(slide, 0, 0, band_w, SLIDE_H, "navy")
+    _rect(slide, band_w, 0, 0.085, SLIDE_H, "amber")
+    _rrect(slide, 0.62, 0.78, 0.60, 0.60, fill="amber", radius=0.12)
+
+    band_note = s.get("band") or s.get("course") or ""
+    if band_note:
+        tf = _text(slide, 0.62, 5.72, band_w - 1.1, 0.9, anchor="t")
+        _T(_para(tf, True), "LECTURE", "kicker_on")
+        _T(_para(tf, False, space_after=0, line=1.3), band_note, "cover_sub",
+           color="white")
+
+    x = band_w + 0.72
+    w = CONTENT_R - x
+    if s.get("kicker"):
+        add_kicker(slide, s["kicker"], x=x, y=2.42, w=w)
+    t = TYPE["cover_title"]
+    title = s.get("title", "강의 슬라이드")
+    pt = _fit([title], w, 1.95, t["size"], t["line"], min_pt=25,
+              label="cover title")
+    tf = _text(slide, x, 2.74, w, 1.95, anchor="t")
+    _T(_para(tf, True, line=t["line"]), title, "cover_title", size=pt)
+
+    sub = s.get("chip") or s.get("subtitle") or ""
+    if sub:
+        _rrect(slide, x, 4.86, 0.5, 0.045, fill="amber", pill=True)
+        tf2 = _text(slide, x, 5.08, w, 0.9, anchor="t")
+        _T(_para(tf2, True, line=TYPE["cover_sub"]["line"]), sub, "cover_sub")
+
+
+def render_section(slide, s, img=None):
+    """구간 전환 — 대형 연번(연한 네이비) + 앰버 바 + 제목."""
+    num = str(s.get("num") or "").strip()
+    if num:
+        tf0 = _text(slide, CONTENT_R - 4.2, 1.55, 4.2, 2.0, anchor="m")
+        _T(_para(tf0, True, align="r"), num.zfill(2), "sec_num")
+    _rrect(slide, MARGIN, 3.12, 0.11, 1.26, fill="amber", pill=True)
+    t = TYPE["sec_title"]
+    title = s.get("title", "")
+    pt = _fit([title], CONTENT_W - 0.6, 1.5, t["size"], t["line"], min_pt=22,
+              label="section title")
+    tf = _text(slide, MARGIN + 0.42, 2.98, CONTENT_W - 0.42, 1.55, anchor="m")
+    _T(_para(tf, True, line=t["line"]), title, "sec_title", size=pt)
+    if s.get("chip"):
+        tf2 = _text(slide, MARGIN + 0.42, 4.60, CONTENT_W - 0.42, 0.9, anchor="t")
+        _T(_para(tf2, True, line=1.35), s["chip"], "cover_sub", size=15)
+
+
+def render_bullets(slide, s, img=None):
+    y = _head(slide, s)
+    by = add_chip(slide, s.get("chip"), y=y, emphasis=bool(s.get("emphasis")))
+    top = max(by + 0.28, BODY_TOP)
+    bottom = BODY_BOTTOM
+    if s.get("key") or s.get("footer"):
+        add_footer_key(slide, s.get("key") or s.get("footer"))
+        bottom = BODY_BOTTOM - 0.60 - 0.22
+    add_bullets(slide, s.get("bullets", []), MARGIN + 0.04, top,
+                CONTENT_W - 0.08, bottom - top,
+                label=f"bullets:{str(s.get('title'))[:18]}")
+
+
+def render_photo(slide, s, img=None):
+    y = _head(slide, s)
     emph = bool(s.get("emphasis"))
     if not img:
-        by = add_chip(slide, s.get("chip"), emphasis=emph)
-        add_bullets(slide, s.get("bullets", []), MARGIN + 0.02, by + 0.15,
-                    CONTENT_W, 6.95 - (by + 0.15))
-        return
-    p = PHOTO_PRESETS[s.get("_idx", 0) % len(PHOTO_PRESETS)]
-    add_photo(slide, img, *p["img"])
+        return render_bullets(slide, s)
+    p = PHOTO_PRESETS[s.get("_photo_ord", 0) % len(PHOTO_PRESETS)]
+    add_photo(slide, img, *p["img"], credit=s.get("_credit_short"))
     tx, tw = p["tx"], p["tw"]
-    by = add_chip(slide, s.get("chip"), x=tx, w=tw, emphasis=emph)
-    top = by + 0.15
-    bottom = (p["img"][1] - 0.15) if p.get("below") else 6.95
-    add_bullets(slide, s.get("bullets", []), tx + 0.02, top, tw - 0.04, max(1.0, bottom - top))
+    by = add_chip(slide, s.get("chip"), x=tx, y=y, w=tw, emphasis=emph)
+    # 칩이 없으면 본문을 사진 윗선에 맞춘다(칩이 있을 때는 칩 아래).
+    top = max(by + 0.26, BODY_TOP) if s.get("chip") else PHOTO_TOP
+    bottom = (p["img"][1] - 0.22) if p.get("below") else BODY_BOTTOM
+    add_bullets(slide, s.get("bullets", []), tx + 0.04, top, tw - 0.08,
+                max(0.8, bottom - top),
+                label=f"photo:{str(s.get('title'))[:18]}")
 
 
-def render_bullets(slide, s):
-    add_title(slide, s.get("title", ""))
-    by = add_chip(slide, s.get("chip"), emphasis=bool(s.get("emphasis")))
-    add_bullets(slide, s.get("bullets", []), MARGIN + 0.02, max(by + 0.2, 2.72),
-                CONTENT_W, 6.9 - max(by + 0.2, 2.72))
-
-
-def render_process(slide, s):
-    add_title(slide, s.get("title", ""))
-    add_chip(slide, s.get("chip"))
+def render_process(slide, s, img=None):
+    y = _head(slide, s)
+    add_chip(slide, s.get("chip"), y=y)
     items = s.get("items") or [{"label": b} for b in s.get("bullets", [])]
     items = items[:5] or [{"label": "항목"}]
     n = len(items)
-    gap = 0.34
-    node_h = 1.5
+    gap = 0.36
+    node_h = 1.42
     node_w = (CONTENT_W - gap * (n - 1)) / n
-    y = 3.15
+    ny = BODY_TOP + 0.18
+    has_desc = any(it.get("desc") for it in items)
+    lt, ld = TYPE["node_label"], TYPE["node_desc"]
+
+    labels = [str(it.get("label", "")) for it in items]
+    lpt = min(_fit([l], node_w - 0.24, node_h - 0.2, lt["size"], lt["line"],
+                   min_pt=10.5, label="process label") for l in labels)
+    descs = [str(it.get("desc") or "") for it in items]
+    dpt = ld["size"]
+    if has_desc:
+        dpt = min(_fit([d], node_w - 0.14, 1.45, ld["size"], ld["line"],
+                       min_pt=9, label="process desc") for d in descs if d)
+
     for i, it in enumerate(items):
         x = MARGIN + i * (node_w + gap)
-        color = _NODE_ROT[i % len(_NODE_ROT)]
-        _rrect(slide, x, y, node_w, node_h, fill=color, radius=0.12)
-        tf = _text(slide, x + 0.1, y, node_w - 0.2, node_h, anchor="m")
-        p = _para(tf, True, align="c")
-        _run(p, it.get("label", ""), 15, "white", bold=True)
-        desc = it.get("desc")
-        if desc:
-            tf2 = _text(slide, x + 0.05, y + node_h + 0.05, node_w - 0.1, 1.0, anchor="t")
-            _run(_para(tf2, True, align="c", line=1.1), desc, 11, "grey", bold=False)
+        # 단일 계조: 마지막 노드만 앰버로 도착점 표시
+        last = (i == n - 1) and n > 1
+        fill = "amber" if last else _RAMP[min(i, len(_RAMP) - 1)]
+        txt_color = "navy" if last else "white"
+        node = _rrect(slide, x, ny, node_w, node_h, fill=fill, radius=R_CARD)
+        _shadow(node, blur=0.12, dist=0.03, alpha=10)
+        tf = _text(slide, x + 0.12, ny, node_w - 0.24, node_h, anchor="m")
+        _T(_para(tf, True, align="c", line=lt["line"]), it.get("label", ""),
+           "node_label", size=lpt, color=txt_color)
+        if it.get("desc"):
+            tf2 = _text(slide, x + 0.07, ny + node_h + 0.14, node_w - 0.14, 1.45)
+            _T(_para(tf2, True, align="c", line=ld["line"]), it["desc"],
+               "node_desc", size=dpt)
         if i < n - 1:
-            _arrow(slide, x + node_w + 0.03, y + node_h / 2 - 0.14, gap - 0.06, 0.28, "amber")
+            _arrow(slide, x + node_w + 0.05, ny + node_h / 2 - 0.13,
+                   gap - 0.10, 0.26, "amber")
     add_footer_key(slide, s.get("key") or s.get("footer"))
 
 
-def render_cards(slide, s):
-    add_title(slide, s.get("title", ""))
-    add_chip(slide, s.get("chip"))
+def render_cards(slide, s, img=None):
+    y = _head(slide, s)
+    add_chip(slide, s.get("chip"), y=y)
     items = s.get("items") or [{"label": b} for b in s.get("bullets", [])]
     items = items[:4] or [{"label": "항목"}]
-    numbered = bool(s.get("numbered", False))  # 비순차 분류는 숫자 없음(첨삭)
+    numbered = bool(s.get("numbered", False))   # 비순차 분류는 숫자 없음
     n = len(items)
     gap = 0.34
     card_w = (CONTENT_W - gap * (n - 1)) / n
-    y, card_h = 2.95, 2.7
+    cy = BODY_TOP + 0.05
+    has_key = bool(s.get("key") or s.get("footer"))
+    card_h = (BODY_BOTTOM - 0.82 if has_key else BODY_BOTTOM) - cy
+
+    lt, dt = TYPE["card_label"], TYPE["card_desc"]
+    labels = [str(it.get("label", "")) for it in items]
+    lpt = min(_fit([l], card_w - 0.62, 0.62, lt["size"], lt["line"],
+                   min_pt=11.5, label="card label") for l in labels)
+    descs = [str(it.get("desc") or "") for it in items]
+    label_bottom = 1.16 if numbered else 0.98
+    desc_h = card_h - label_bottom - 0.26
+    dpt = dt["size"]
+    if any(descs):
+        dpt = min(_fit([d], card_w - 0.62, desc_h, dt["size"], dt["line"],
+                       min_pt=9.5, label="card desc") for d in descs if d)
+
     for i, it in enumerate(items):
         x = MARGIN + i * (card_w + gap)
-        accent = _BADGE_ROT[i % len(_BADGE_ROT)]
-        _rrect(slide, x, y, card_w, card_h, fill="white", radius=0.1,
-               line="chip", line_w=1.5)
+        accent = _RAMP[min(i, len(_RAMP) - 1)]
+        card = _rrect(slide, x, cy, card_w, card_h, fill="white", radius=R_CARD,
+                      line="navy_12", line_w=1.0)
+        _shadow(card, blur=0.13, dist=0.03, alpha=9)
         if numbered:
-            _oval(slide, x + 0.28, y + 0.28, 0.55, accent)
-            tfb = _text(slide, x + 0.28, y + 0.28, 0.55, 0.55, anchor="m")
-            _run(_para(tfb, True, align="c"), str(i + 1), 16, "white", bold=True)
+            _oval(slide, x + 0.30, cy + 0.30, 0.52, accent)
+            tfb = _text(slide, x + 0.30, cy + 0.30, 0.52, 0.52, anchor="m")
+            _T(_para(tfb, True, align="c"), str(i + 1), "card_label", size=15,
+               color="white")
         else:
-            # 숫자 대신 색 구분 도형(상단 컬러 바)
-            _rrect(slide, x, y, card_w, 0.16, fill=accent, radius=0.3)
-            _oval(slide, x + 0.28, y + 0.4, 0.22, accent)
-        tft = _text(slide, x + 0.28, y + (1.0 if numbered else 0.78), card_w - 0.56, 0.5)
-        _run(_para(tft, True), it.get("label", ""), 16, "navy", bold=True)
+            _rrect(slide, x, cy, card_w, 0.14, fill=accent, radius=0.07)
+            _rrect(slide, x + 0.30, cy + 0.42, 0.30, 0.075, fill=accent, pill=True)
+        tft = _text(slide, x + 0.30, cy + label_bottom - 0.62, card_w - 0.60, 0.62,
+                    anchor="m")
+        _T(_para(tft, True, line=lt["line"]), it.get("label", ""), "card_label",
+           size=lpt, color="navy")
         if it.get("desc"):
-            dy = y + (1.55 if numbered else 1.33)
-            tfd = _text(slide, x + 0.28, dy, card_w - 0.56, card_h - (dy - y) - 0.15)
-            _run(_para(tfd, True, line=1.15), it["desc"], 12.5, "grey", bold=False)
+            tfd = _text(slide, x + 0.30, cy + label_bottom, card_w - 0.60, desc_h)
+            _T(_para(tfd, True, line=dt["line"]), it["desc"], "card_desc", size=dpt)
     add_footer_key(slide, s.get("key") or s.get("footer"))
 
 
-def render_compare(slide, s):
-    add_title(slide, s.get("title", ""))
-    add_chip(slide, s.get("chip"))
+def render_compare(slide, s, img=None):
+    y = _head(slide, s)
+    add_chip(slide, s.get("chip"), y=y)
     items = (s.get("items") or [])[:2]
     while len(items) < 2:
-        items.append({"label": "", "desc": ""})
-    y, h = 2.95, 3.6
-    col_w = (CONTENT_W - 0.4) / 2
-    colors = ("navy", "teal")
+        items.append({"label": "", "lines": []})
+    cy = BODY_TOP + 0.05
+    col_h = BODY_BOTTOM - cy
+    col_w = (CONTENT_W - 0.42) / 2
+    head_h = 0.60
+    fills = ("navy", "amber")            # 2색 체계 — teal 제거
+    heads = ("white", "navy")
+    td = TYPE["td"]
+
     for i, it in enumerate(items):
-        x = MARGIN + i * (col_w + 0.4)
-        _rrect(slide, x, y, col_w, h, fill="chip", radius=0.08)
-        # 컬러 헤더 바 + 가운데 정렬 라벨(첨삭: 비교 라벨 가운데 정렬)
-        _rrect(slide, x, y, col_w, 0.62, fill=colors[i % 2], radius=0.08)
-        tft = _text(slide, x + 0.2, y, col_w - 0.4, 0.62, anchor="m")
-        _run(_para(tft, True, align="c"), it.get("label", ""), 16, "white", bold=True)
-        lines = it.get("lines") or ([it.get("desc")] if it.get("desc") else [])
-        if lines:
-            tf = _text(slide, x + 0.25, y + 0.85, col_w - 0.5, h - 1.0, anchor="t")
-            for j, ln in enumerate(lines):
-                _run(_para(tf, j == 0, align="c", space_after=7, line=1.2),
-                     str(ln), 13.5, "grey", bold=False)
+        x = MARGIN + i * (col_w + 0.42)
+        col = _rrect(slide, x, cy, col_w, col_h, fill="chip", radius=R_CARD)
+        _shadow(col, blur=0.12, dist=0.03, alpha=8)
+        _rrect(slide, x, cy, col_w, head_h, fill=fills[i], radius=R_CARD)
+        _rect(slide, x, cy + head_h - 0.10, col_w, 0.10, fills[i])
+        tft = _text(slide, x + 0.2, cy, col_w - 0.4, head_h, anchor="m")
+        _T(_para(tft, True, align="c"), it.get("label", ""), "card_label",
+           size=15, color=heads[i])
+        lines = it.get("lines") or ([it["desc"]] if it.get("desc") else [])
+        lines = [str(l) for l in lines if str(l).strip()]
+        if not lines:
+            continue
+        # 라벨만 가운데, 본문은 좌측 정렬(문장이 가운데면 읽히지 않는다)
+        box_w, box_h = col_w - 0.66, col_h - head_h - 0.42
+        sa = 6.0
+        pt = _fit(lines, box_w, box_h, 14.0, td["line"], sa, min_pt=10,
+                  label=f"compare:{it.get('label')}")
+        lines = _trim_to_fit(lines, box_w, box_h, pt, td["line"], sa,
+                             label=f"compare:{it.get('label')}")
+        tf = _text(slide, x + 0.34, cy + head_h + 0.26, box_w, box_h, anchor="t")
+        for j, ln in enumerate(lines):
+            p = _para(tf, j == 0, space_after=sa, line=td["line"])
+            _hang(p, 0.22)
+            _run(p, "· ", pt, "amber", "sb")
+            _T(p, ln, "td", size=pt)
 
 
-def render_table(slide, s):
+def _cell_border(cell, color="white", w_pt=1.0):
+    from pptx.oxml.ns import qn
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    for tag in ("a:lnL", "a:lnR", "a:lnT", "a:lnB"):
+        for el in tcPr.findall(qn(tag)):
+            tcPr.remove(el)
+    # lnL, lnR, lnT, lnB 는 tcPr 의 맨 앞 순서
+    for tag in ("a:lnB", "a:lnT", "a:lnR", "a:lnL"):
+        ln = tcPr.makeelement(qn(tag), {"w": str(int(w_pt * 12700)),
+                                        "cap": "flat", "cmpd": "sng",
+                                        "algn": "ctr"})
+        fill = ln.makeelement(qn("a:solidFill"), {})
+        fill.append(fill.makeelement(qn("a:srgbClr"), {"val": _hexstr(color)}))
+        ln.append(fill)
+        tcPr.insert(0, ln)
+
+
+def render_table(slide, s, img=None):
     from pptx.util import Inches, Pt
-    add_title(slide, s.get("title", ""))
-    by = add_chip(slide, s.get("chip"))
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+    from pptx.oxml.ns import qn
+
+    y0 = _head(slide, s)
+    by = add_chip(slide, s.get("chip"), y=y0)
     rows_data = s.get("rows")
     if not rows_data:
         return render_bullets(slide, s)
     headers = s.get("headers") or []
-    y = max(by + 0.25, 2.8)
+    y = max(by + 0.30, BODY_TOP)
     ncol = len(headers) or max(len(r) for r in rows_data)
     nrow = len(rows_data) + (1 if headers else 0)
+    avail = BODY_BOTTOM - y
+    row_h = min(0.46, max(0.30, avail / max(nrow, 1)))
     tbl_shape = slide.shapes.add_table(nrow, ncol, Inches(MARGIN), Inches(y),
-                                       Inches(CONTENT_W), Inches(min(0.5 * nrow, 4.0)))
+                                       Inches(CONTENT_W), Inches(row_h * nrow))
     tbl = tbl_shape.table
-    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 
-    def _style_cell(cell, text, *, bold, size):
+    # PowerPoint 기본 파랑 밴딩 스타일 제거 — 셀 채움을 직접 지정한다
+    try:
+        tbl.first_row = bool(headers)
+        tbl.horz_banding = False
+        tbl.vert_banding = False
+        tblPr = tbl._tbl.find(qn("a:tblPr"))
+        if tblPr is not None:
+            for el in tblPr.findall(qn("a:tableStyleId")):
+                tblPr.remove(el)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 문장 열은 좌측, 짧은 값 열은 가운데
+    col_len = []
+    for c in range(ncol):
+        vals = [str(r[c]) for r in rows_data if c < len(r)]
+        col_len.append(max((len(v) for v in vals), default=0))
+    aligns = [PP_ALIGN.LEFT if L > 12 else PP_ALIGN.CENTER for L in col_len]
+
+    th, td = TYPE["th"], TYPE["td"]
+    body_pt = td["size"]
+    if rows_data:
+        cell_w = CONTENT_W / ncol
+        body_pt = min(
+            _fit_each([str(r[c]) for r in rows_data if c < len(r)],
+                      cell_w - 0.24, row_h - 0.10, td["size"], 1.16,
+                      min_pt=8.5, label=f"table col{c}")
+            for c in range(ncol))
+
+    def _style(cell, text, *, header, align, bg):
         cell.text = str(text)
         cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+        cell.margin_left = cell.margin_right = Inches(0.10)
+        cell.margin_top = cell.margin_bottom = Inches(0.03)
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = _rgb(bg)
+        _cell_border(cell, "white", 1.0)
         for para in cell.text_frame.paragraphs:
-            para.alignment = PP_ALIGN.CENTER  # 첨삭: 표 셀 텍스트 가운데 정렬
+            para.alignment = align
+            para.line_spacing = 1.16
             for run in para.runs:
-                run.font.bold = bold; run.font.size = Pt(size); run.font.name = FONT
+                run.font.size = Pt(th["size"] if header else body_pt)
+                run.font.bold = _FS.is_bold("sb" if header else "r")
+                run.font.color.rgb = _rgb("white" if header else "ink")
+                pptx_font.apply_face(run, _FS.face("sb" if header else "r"))
 
     r0 = 0
     if headers:
         for c, htxt in enumerate(headers):
-            _style_cell(tbl.cell(0, c), htxt, bold=True, size=12)  # 헤더 bold
+            _style(tbl.cell(0, c), htxt, header=True, align=PP_ALIGN.CENTER,
+                   bg="navy")
         r0 = 1
     for ri, row in enumerate(rows_data):
+        bg = "white" if ri % 2 == 0 else "chip"
         for c in range(ncol):
-            _style_cell(tbl.cell(ri + r0, c), row[c] if c < len(row) else "",
-                        bold=False, size=11)
+            _style(tbl.cell(ri + r0, c), row[c] if c < len(row) else "",
+                   header=False, align=aligns[c], bg=bg)
+
+
+def render_quiz(slide, s, img=None):
+    """형성평가 1문항 — 문제(네이비 칩) + 보기 알약 + 정답 뱃지 우하단."""
+    s = dict(s)
+    s.setdefault("kicker", "형성평가")
+    y = _head(slide, s)
+    question = s.get("question") or s.get("chip") or ""
+    by = add_chip(slide, question, y=y, emphasis=True) if question else y
+
+    choices = s.get("choices") or s.get("items") or s.get("bullets") or []
+    choices = [str(c).strip() for c in choices if str(c).strip()][:5]
+    top = max(by + 0.34, BODY_TOP)
+    answer = s.get("answer") or s.get("key")
+    bottom = BODY_BOTTOM - (0.72 if answer else 0.0)
+
+    if choices:
+        marks = "①②③④⑤"
+        n = len(choices)
+        gap = 0.16
+        row_h = min(0.82, max(0.52, (bottom - top - gap * (n - 1)) / n))
+        pt = _fit_each(choices, CONTENT_W - 1.2, row_h - 0.12, 15.0, 1.2,
+                       min_pt=11, label="quiz choice")
+        for i, c in enumerate(choices):
+            ry = top + i * (row_h + gap)
+            _rrect(slide, MARGIN, ry, CONTENT_W, row_h, fill="chip", pill=True)
+            _oval(slide, MARGIN + 0.20, ry + row_h / 2 - 0.15, 0.30, "navy")
+            tfm = _text(slide, MARGIN + 0.20, ry, 0.30, row_h, anchor="m")
+            _T(_para(tfm, True, align="c"), marks[i], "card_label", size=12,
+               color="white")
+            tf = _text(slide, MARGIN + 0.66, ry, CONTENT_W - 0.9, row_h, anchor="m")
+            _T(_para(tf, True, line=1.2), c, "bullet", size=pt)
+    else:
+        add_bullets(slide, s.get("bullets", []), MARGIN + 0.04, top,
+                    CONTENT_W - 0.08, bottom - top, label="quiz body")
+
+    if answer:
+        w = min(3.6, max(1.5, 0.30 + _measure(f"정답  {answer}", 13.0)))
+        ay = BODY_BOTTOM - 0.50
+        _rrect(slide, CONTENT_R - w, ay, w, 0.50, fill="amber", pill=True)
+        tf = _text(slide, CONTENT_R - w + 0.16, ay, w - 0.32, 0.50, anchor="m")
+        p = _para(tf, True, align="c")
+        _run(p, "정답  ", 12.0, "amber_dk", "sb")
+        _T(p, answer, "answer")
+
+
+def render_objectives(slide, s, img=None):
+    """학습목표 — 대형 연번 + 목표 문장. 이미지 없음."""
+    s = dict(s)
+    s.setdefault("kicker", "학습목표")
+    y = _head(slide, s)
+    by = add_chip(slide, s.get("chip"), y=y) if s.get("chip") else y
+    goals = s.get("items") or s.get("bullets") or []
+    goals = [(g.get("label") if isinstance(g, dict) else str(g)) for g in goals]
+    goals = [str(g).strip() for g in goals if str(g).strip()][:4]
+    if not goals:
+        return render_bullets(slide, s)
+    top = max(by + 0.34, BODY_TOP)
+    n = len(goals)
+    gap = 0.20
+    row_h = min(1.30, (BODY_BOTTOM - top - gap * (n - 1)) / n)
+    pt = _fit_each(goals, CONTENT_W - 1.72, row_h - 0.14, 17.0, 1.34,
+                   min_pt=12, label="objective")
+    for i, g in enumerate(goals):
+        ry = top + i * (row_h + gap)
+        tfn = _text(slide, MARGIN, ry, 1.30, row_h, anchor="m")
+        _T(_para(tfn, True), str(i + 1).zfill(2), "big_num")
+        _rect(slide, MARGIN + 1.16, ry + 0.10, 0.02, row_h - 0.20, "navy_12")
+        tf = _text(slide, MARGIN + 1.42, ry, CONTENT_W - 1.42, row_h, anchor="m")
+        _T(_para(tf, True, line=1.34), g, "bullet", size=pt)
+
+
+def render_agenda(slide, s, img=None):
+    """목차 — 2열 번호 목록. active 로 현재 구간 강조."""
+    s = dict(s)
+    s.setdefault("kicker", "목차")
+    y = _head(slide, s)
+    by = add_chip(slide, s.get("chip"), y=y) if s.get("chip") else y
+    items = s.get("items") or s.get("bullets") or []
+    items = [(i.get("label") if isinstance(i, dict) else str(i)) for i in items]
+    items = [str(i).strip() for i in items if str(i).strip()][:10]
+    if not items:
+        return render_bullets(slide, s)
+    active = s.get("active")
+    top = max(by + 0.34, BODY_TOP)
+    ncol = 2 if len(items) > 4 else 1
+    per = math.ceil(len(items) / ncol)
+    col_w = (CONTENT_W - 0.5) / ncol
+    row_h = min(0.80, (BODY_BOTTOM - top) / per)
+    pt = _fit_each(items, col_w - 0.85, row_h - 0.12, 15.5, 1.25, min_pt=11,
+                   label="agenda")
+    for i, it in enumerate(items):
+        c, r = divmod(i, per)
+        x = MARGIN + c * (col_w + 0.5)
+        ry = top + r * row_h
+        on = (active is not None and int(active) == i + 1)
+        if on:
+            _rrect(slide, x - 0.10, ry + 0.04, col_w + 0.10, row_h - 0.08,
+                   fill="chip", radius=R_CARD)
+        _oval(slide, x, ry + row_h / 2 - 0.15, 0.30, "navy" if on else "navy_30")
+        tfn = _text(slide, x, ry, 0.30, row_h, anchor="m")
+        _T(_para(tfn, True, align="c"), str(i + 1), "card_label", size=11.5,
+           color="white")
+        tf = _text(slide, x + 0.46, ry, col_w - 0.5, row_h, anchor="m")
+        _T(_para(tf, True, line=1.25), it, "bullet", size=pt,
+           color=("navy" if on else "ink"), weight=("sb" if on else "r"))
+
+
+def render_closing(slide, s, img=None):
+    """마무리 — 요약 / 다음 차시 / 과제 3블록."""
+    s = dict(s)
+    s.setdefault("kicker", "마무리")
+    y = _head(slide, s)
+    add_chip(slide, s.get("chip"), y=y)
+    items = s.get("items") or []
+    if not items:
+        bl = [str(b) for b in s.get("bullets", []) if str(b).strip()]
+        if not bl:
+            return render_bullets(slide, s)
+        labels = ["오늘의 요약", "다음 차시", "과제"]
+        per = math.ceil(len(bl) / 3) or 1
+        items = [{"label": labels[i], "lines": bl[i * per:(i + 1) * per]}
+                 for i in range(3) if bl[i * per:(i + 1) * per]]
+    items = items[:3]
+    n = len(items)
+    gap = 0.34
+    col_w = (CONTENT_W - gap * (n - 1)) / n
+    cy = BODY_TOP + 0.05
+    col_h = BODY_BOTTOM - cy
+    td = TYPE["td"]
+    for i, it in enumerate(items):
+        x = MARGIN + i * (col_w + gap)
+        box = _rrect(slide, x, cy, col_w, col_h, fill="white", radius=R_CARD,
+                     line="navy_12", line_w=1.0)
+        _shadow(box, blur=0.13, dist=0.03, alpha=9)
+        _rrect(slide, x, cy, col_w, 0.14, fill=_RAMP[min(i, 3)], radius=0.07)
+        tfl = _text(slide, x + 0.28, cy + 0.34, col_w - 0.56, 0.5, anchor="m")
+        _T(_para(tfl, True), it.get("label", ""), "card_label")
+        lines = it.get("lines") or ([it["desc"]] if it.get("desc") else [])
+        lines = [str(l) for l in lines if str(l).strip()]
+        if not lines:
+            continue
+        box_w, box_h = col_w - 0.56, col_h - 1.10
+        sa = 6.0
+        pt = _fit(lines, box_w, box_h, 13.0, td["line"], sa, min_pt=9.5,
+                  label=f"closing:{it.get('label')}")
+        lines = _trim_to_fit(lines, box_w, box_h, pt, td["line"], sa,
+                             label=f"closing:{it.get('label')}")
+        tf = _text(slide, x + 0.28, cy + 0.94, box_w, box_h, anchor="t")
+        for j, ln in enumerate(lines):
+            p = _para(tf, j == 0, space_after=sa, line=td["line"])
+            _hang(p, 0.22)
+            _run(p, "· ", pt, "amber", "sb")
+            _T(p, ln, "td", size=pt)
+
+
+def render_stat(slide, s, img=None):
+    """수치 강조 — 대형 숫자 + 단위 + 한 줄 설명(최대 3개)."""
+    y = _head(slide, s)
+    add_chip(slide, s.get("chip"), y=y)
+    items = s.get("items") or []
+    if not items:
+        return render_bullets(slide, s)
+    items = items[:3]
+    n = len(items)
+    gap = 0.34
+    col_w = (CONTENT_W - gap * (n - 1)) / n
+    cy = BODY_TOP + 0.15
+    has_key = bool(s.get("key") or s.get("footer"))
+    col_h = (BODY_BOTTOM - 0.82 if has_key else BODY_BOTTOM) - cy
+    for i, it in enumerate(items):
+        x = MARGIN + i * (col_w + gap)
+        _rrect(slide, x, cy, col_w, col_h, fill="chip", radius=R_CARD)
+        _rrect(slide, x + col_w / 2 - 0.28, cy + 0.34, 0.56, 0.05, fill="amber",
+               pill=True)
+        num = str(it.get("label", ""))
+        npt = _fit([num], col_w - 0.5, 1.3, TYPE["stat_num"]["size"], 1.1,
+                   min_pt=26, label="stat num")
+        tfn = _text(slide, x + 0.2, cy + 0.72, col_w - 0.4, 1.4, anchor="m")
+        _T(_para(tfn, True, align="c"), num, "stat_num", size=npt)
+        if it.get("desc"):
+            dh = col_h - 2.3
+            dpt = _fit([str(it["desc"])], col_w - 0.7, dh, 13.5, 1.35,
+                       min_pt=10, label="stat desc")
+            tfd = _text(slide, x + 0.35, cy + 2.15, col_w - 0.7, dh, anchor="t")
+            _T(_para(tfd, True, align="c", line=1.35), it["desc"], "td", size=dpt)
+    add_footer_key(slide, s.get("key") or s.get("footer"))
 
 
 _RENDER = {
-    "cover": lambda sl, s, img: render_cover(sl, s),
-    "section": lambda sl, s, img: render_section(sl, s),
+    "cover": render_cover,
+    "section": render_section,
     "photo": render_photo,
-    "process": lambda sl, s, img: render_process(sl, s),
-    "cards": lambda sl, s, img: render_cards(sl, s),
-    "compare": lambda sl, s, img: render_compare(sl, s),
-    "table": lambda sl, s, img: render_table(sl, s),
-    "bullets": lambda sl, s, img: render_bullets(sl, s),
+    "process": render_process,
+    "cards": render_cards,
+    "compare": render_compare,
+    "table": render_table,
+    "bullets": render_bullets,
+    "quiz": render_quiz,
+    "objectives": render_objectives,
+    "agenda": render_agenda,
+    "closing": render_closing,
+    "stat": render_stat,
 }
+
+# 러닝 푸터·페이지 번호를 넣지 않는 타입
+_NO_RUNNING = ("cover", "section")
 
 
 def build_deck(plan: List[Dict], template_path: Optional[str] = None,
                images: Optional[Dict[int, bytes]] = None,
                deck_title: str = "강의 슬라이드",
-               logo_path: Optional[str] = None) -> Optional[bytes]:
-    """슬라이드플랜 → 디자인된 .pptx 바이트. python-pptx 미설치 시 None."""
+               logo_path: Optional[str] = None, *,
+               footer: str = "", assets_dir=None,
+               embed_font: bool = True) -> Optional[bytes]:
+    """슬라이드플랜 → 디자인된 .pptx 바이트. python-pptx 미설치 시 None.
+
+    embed_font=False 면 Pretendard 를 '이름으로만' 지정한다(파일 ~3MB 작아지지만
+    폰트가 설치되지 않은 PC 에서는 대체 폰트로 열린다).
+    """
+    global _FS
     try:
         from pptx import Presentation
         from pptx.util import Inches
     except Exception:  # noqa: BLE001
         return None
+
+    adir = assets_dir or ASSETS_DIR
+    _FS = pptx_font.font_set(adir)
 
     images = images or {}
     use_tpl = bool(template_path and os.path.isfile(template_path))
@@ -480,29 +1124,59 @@ def build_deck(plan: List[Dict], template_path: Optional[str] = None,
             prs = Presentation(template_path)
             _remove_all_slides(prs)
         except Exception:  # noqa: BLE001
-            prs = Presentation(); use_tpl = False
+            prs = Presentation()
+            use_tpl = False
     else:
         prs = Presentation()
     if not use_tpl:
         prs.slide_width = Inches(SLIDE_W)
         prs.slide_height = Inches(SLIDE_H)
 
+    if _FS.embedded and embed_font:
+        got = pptx_font.embed_fonts(prs, adir)
+        if not got:
+            _FS = pptx_font.SYSTEM_SET     # 임베드 실패 → 안전하게 시스템 폰트로
+            _log("[font] 임베드 불가 — 맑은 고딕으로 폴백")
+        else:
+            _log(f"[font] 임베드: {', '.join(got)}")
+    elif _FS.embedded:
+        _log("[font] 임베드 끄기 — Pretendard 이름만 지정")
+
+    has_logo = bool(logo_path and os.path.isfile(logo_path))
     layout = _blank_layout(prs)
+    photo_ord = 0
+    sec_num = 0
+    fallbacks: List[int] = []
+
     for i, s in enumerate(plan):
         slide = prs.slides.add_slide(layout)
         _strip_placeholders(slide)
-        s["_idx"] = i  # 사진 배치 프리셋 순환용
         typ = (s.get("type") or "bullets").lower()
-        fn = _RENDER.get(typ, _RENDER["bullets"])
+        s["_idx"] = i
+        if typ == "photo":
+            s["_photo_ord"] = photo_ord
+            photo_ord += 1
+        if typ == "section":
+            sec_num += 1
+            s.setdefault("num", sec_num)
+        s["_has_logo"] = has_logo
+        fn = _RENDER.get(typ, render_bullets)
         try:
             fn(slide, s, images.get(i))
         except Exception as e:  # noqa: BLE001
-            print(f"[deck] slide {i} ({typ}) 렌더 오류: {e}", flush=True)
+            _log(f"[deck] slide {i + 1} ({typ}) 렌더 오류: {e}")
+            fallbacks.append(i + 1)
             try:
                 render_bullets(slide, s)
             except Exception:  # noqa: BLE001
                 pass
-        add_logo(slide, logo_path)
+        if typ not in _NO_RUNNING:
+            add_running(slide, footer, i + 1)
+        if typ != "cover":
+            add_logo(slide, logo_path)
+
+    if fallbacks:
+        _log(f"[deck] 폴백 렌더된 슬라이드: {fallbacks}")
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -518,35 +1192,61 @@ _ART_SYS = (
 _ART_RULES = """개요의 '### 슬라이드 N' 블록 하나당 JSON 객체 하나를 순서대로 만든다(개수 유지).
 각 객체 스키마:
 {
-  "type": "section|photo|process|cards|compare|table|bullets",
+  "type": "section|photo|process|cards|compare|table|quiz|objectives|agenda|closing|stat|bullets",
   "title": "간결·정확한 제목",
+  "kicker": "상단 초소형 라벨(선택, 6자 이내. 예 '개념'·'사례'·'이론')",
   "chip": "요약 한 문장(명사형). 없으면 생략 가능",
   "bullets": ["불릿 3~5개(명사형 어미)"],
   "items": [{"label":"짧은 이름","desc":"한 줄 설명"}],
   "image_query": "photo형일 때만, 영어 검색어",
+  "key": "하단 핵심 한 줄(선택, 명사형)",
+  "level": "기억|이해|적용|분석|평가|창조 — 이 슬라이드가 지지하는 차시 학습목표의 인지수준",
   "numbered": false,
   "emphasis": false
 }
+인지수준(level) — 반드시 채운다:
+- 개요의 각 블록에 있는 **'지지 목표: (인지수준) 목표N'** 줄을 그대로 옮긴다.
+  그 줄이 없으면 개요 맨 앞 '차시 학습목표'의 인지수준 태그([기억]…[창조])를 보고
+  이 슬라이드가 어느 목표를 지지하는지 판단해 적는다. 새 목표를 만들지 않는다.
+- '지지 목표' 줄은 설계용 메타이므로 bullets 에 넣지 않는다.
+- level 은 슬라이드에 인쇄되지 않는다(학습자용 화면에 설계 태그를 노출하지 않는다).
+  교수자가 목표–자료 정렬을 점검하는 데 쓴다.
+**인지수준 → 레이아웃 정렬(구성적 정렬 원칙)**:
+- 기억: cards(용어·항목 병렬) · bullets · table(정의 목록)
+- 이해: photo(예시·사례로 의미 부여) · bullets · process(흐름 설명)
+- 적용: process(절차·단계) · cards(적용 조건) · quiz
+- 분석: compare(두 개념 대비) · table(기준별 비교) · stat(수치 근거)
+- 평가: compare(장단·타당성) · table(판단 기준) · quiz
+- 창조: process(산출 절차) · cards(설계 요소) · closing(과제로 연결)
+목표가 분석·평가인데 레이아웃이 단순 나열(bullets)이면 정렬 오류다 — 비교·표로 바꾼다.
 문체·제목:
 - 불릿·라벨은 **명사형 어미**(예 "즉시 피드백 제공" → "즉시 피드백"). 존댓말·서술체·교수자 나레이션 문장 금지.
 - 제목은 간결·일관("정의와 과정"·"개요"·"논의" 같은 군더더기 제거).
+- **불릿 한 줄은 32자 이내.** 길면 두 항목으로 쪼갠다(슬라이드가 넘친다).
 타입 선택 규칙:
 - "cover"는 만들지 마라(표지는 시스템이 맨 앞에 자동 추가).
+- **학습목표 슬라이드 → "objectives"** (bullets 에 목표 2~3개). 이미지 없음.
+- **목차·구성 안내 → "agenda"** (items[].label 또는 bullets).
+- **퀴즈·형성평가 1문항 → "quiz"**: {"question":"문제", "choices":["보기1",…4개], "answer":"③"}.
+  한 슬라이드에 한 문제. 정답은 시스템이 우하단 뱃지로 배치한다.
+- **마무리·요약 → "closing"**: items 3개 {"label":"오늘의 요약|다음 차시|과제","lines":[…]}.
 - 순서·단계·절차가 핵심: "process" (items[].label 2~5개). 화살표로 연결됨.
-- 병렬·분류·구성요소: "cards" (items[].label + desc). **비순차이므로 numbered=false(기본). 순서가 있을 때만 numbered=true.**
+- 병렬·분류·구성요소: "cards" (items[].label + desc, 2~4개). **비순차이므로 numbered=false(기본).**
 - 두 개념 대비/비교: "compare" (items 2개, 각 {"label","lines":[...]}).
-- 구성 개요·유형 비교 등 표가 자연스러운 것: "table" (headers:[...], rows:[[...]]).
+- 표가 자연스러운 것: "table" (headers:[...], rows:[[...]]). 5열·8행 이내.
+- 수치가 메시지인 것: "stat" (items 2~3개, {"label":"85%","desc":"설명"}).
 - 도입·구간 전환: "section".
-- 사진이 이해를 돕는 개념/사례/인물: "photo" + 구체적 영어 image_query(막연한 'education' 금지). 예) 행동주의→'Pavlov conditioning experiment', 인지주의→'human brain memory diagram', 매체→'classroom projector lesson', 인물→'portrait of a scholar'. 전체의 약 40~55%.
-- 그 외: "bullets".
+- 사진이 이해를 돕는 개념/사례/인물: "photo" + 구체적 영어 image_query(막연한 'education' 금지).
+  예) 행동주의→'Pavlov conditioning experiment', 인지주의→'human brain memory diagram',
+  매체→'classroom projector lesson', 인물→'portrait of a scholar'. 전체의 약 40~55%.
 이미지 배치 규칙(중요):
-- **학습목표·문제·퀴즈·순수 정리 슬라이드는 photo 로 하지 말 것(이미지 없음).** 이런 슬라이드는 bullets/cards/table 로.
+- **objectives·quiz·closing·table·순수 정리 슬라이드는 photo 로 하지 말 것(이미지 없음).**
 - 사례·실물·인물·대표 이론 슬라이드에는 photo 지정.
 강조(emphasis):
-- **emphasis=true 는 문제/질문/학습목표/퀴즈 슬라이드에만.** 그 외에는 false(강조 남용 금지).
+- **emphasis=true 는 문제/질문 칩에만.** quiz 는 자동 강조되므로 따로 켜지 않는다.
 공통:
-- 같은 타입이 여러 장 연속되지 않게 섞는다. 동일 내용이 반복되면 한 슬라이드로 합친다.
-- process/cards엔 key(하단 핵심 한 줄, 명사형)를 넣어도 좋다.
+- 같은 타입이 3장 이상 연속되지 않게 섞는다. 동일 내용이 반복되면 한 슬라이드로 합친다.
+- process/cards/stat 엔 key(하단 핵심 한 줄, 명사형)를 넣어도 좋다.
 """
 
 
@@ -600,23 +1300,76 @@ def _outline_blocks(outline_md: str) -> List[str]:
     return [p.strip() for p in parts if re.match(r"#{2,3}\s*슬라이드", p.strip())]
 
 
+# 개요 블록의 '설계 메타' 키 — 슬라이드 본문이 아니므로 불릿으로 넣지 않는다.
+# 이걸 걸러내지 않으면 '발표자 노트' 의 나레이션 문단이 통째로 불릿이 된다(실제로 그랬다).
+_META_KEYS = ("레이아웃", "시각자료", "강조 신호", "발표자", "노트", "지지",
+              "구간", "시간", "슬라이드 수", "이미지", "출처", "비고")
+# '- **키**: 값' 형태의 라벨 줄
+_KEY_LINE = re.compile(r"^[-*+•·]?\s*\*{0,2}([^*:：]{1,24})\*{0,2}\s*[:：]\s*(.*)$")
+
+
 def _block_to_bullets(block: str) -> Dict:
-    """개요 블록 하나 → bullets 슬라이드 dict(아트디렉터 실패 시 폴백)."""
-    lines = [l.strip() for l in block.splitlines() if l.strip()]
-    title = re.sub(r"^#{2,3}\s*", "", lines[0]) if lines else "슬라이드"
+    """개요 블록 하나 → bullets 슬라이드 dict(아트디렉터 실패 시 폴백).
+
+    실제 개요는 이렇게 생겼다 — '본문 개요' 아래에 들여쓴 하위 불릿이 오고,
+    그 뒤에 설계 메타 줄이 더 붙는다:
+
+        - **레이아웃 제안**: 콘텐츠
+        - **핵심 메시지(1개)**: …
+        - **본문 개요**:
+            - 정의: AECT …
+            - '학습 촉진'과 '성과 개선'이 최종 목표
+        - **시각자료 제안**: …
+        - **발표자 노트(대화체)**: "자, 그럼 …"
+
+    그래서 '본문 개요' 이후의 하위 불릿만 본문으로 삼고, 다음 라벨 줄이 나오면 멈춘다.
+    """
+    raw = [l for l in block.splitlines() if l.strip()]
+    title = re.sub(r"^#{2,3}\s*", "", raw[0].strip()) if raw else "슬라이드"
     title = re.sub(r"^슬라이드\s*\d+\s*[—\-:：]\s*", "", title).strip()
-    chip, bullets = "", []
-    for ln in lines[1:]:
-        m = re.match(r"^[-*+]?\s*\*{0,2}([^*:：]{1,20})\*{0,2}\s*[:：]\s*(.*)$", ln)
-        if m and "핵심" in m.group(1):
-            chip = m.group(2).strip()
-        elif m and "레이아웃" in m.group(1):
+
+    chip, level, bullets = "", "", []
+    in_body = False
+    for ln in raw[1:]:
+        s = ln.strip()
+        m = _KEY_LINE.match(s)
+        key = m.group(1).strip() if m else ""
+        val = m.group(2).strip() if m else ""
+
+        if key.startswith("본문"):
+            in_body = True
+            if val:                     # 같은 줄에 인라인으로 쓴 경우
+                bullets += [x.strip() for x in re.split(r"\s*[/·]\s*", val) if x.strip()]
             continue
-        else:
-            v = re.sub(r"^[-*+•·]\s*", "", ln)
-            if v and not re.match(r"^\**본문", v):
+        if m and any(k in key for k in _META_KEYS):
+            if "지지" in key:           # '지지 목표: (분석) 목표2' → level 만 회수
+                level = next((b for b in BLOOM_LEVELS if b in val), "")
+            in_body = False             # 메타 줄이 나오면 본문 구간이 끝난 것
+            continue
+        if m and "핵심" in key:
+            chip = val
+            in_body = False
+            continue
+
+        # 라벨 없는 줄: 본문 구간 안이면 불릿, 밖이면 버린다
+        if in_body:
+            v = re.sub(r"^[-*+•·]\s*", "", s)
+            if v:
                 bullets.append(v)
-    return {"type": "bullets", "title": title, "chip": chip, "bullets": bullets[:5]}
+
+    # 본문 구간을 못 찾았으면(형식이 다르면) 라벨 없는 줄을 본문으로 본다
+    if not bullets:
+        for ln in raw[1:]:
+            s = ln.strip()
+            m = _KEY_LINE.match(s)
+            if m and (any(k in m.group(1) for k in _META_KEYS) or "핵심" in m.group(1)):
+                continue
+            v = re.sub(r"^[-*+•·]\s*", "", s)
+            if v and not v.startswith("**"):
+                bullets.append(v)
+
+    return {"type": "bullets", "title": title, "chip": chip,
+            "bullets": bullets[:5], "level": level}
 
 
 def _fallback_plan(outline_md: str, deck_title: str) -> List[Dict]:
@@ -626,15 +1379,33 @@ def _fallback_plan(outline_md: str, deck_title: str) -> List[Dict]:
     return plan
 
 
+BLOOM_LEVELS = ("기억", "이해", "적용", "분석", "평가", "창조")
+
+
 def _normalize_slide(s: Dict) -> Optional[Dict]:
     if not isinstance(s, dict):
         return None
     s.setdefault("type", "bullets")
     s.setdefault("title", "")
     s.setdefault("bullets", [])
+    if s["type"] not in _RENDER:
+        s["type"] = "bullets"
     if s["type"] == "cover":   # LLM이 표지를 만들면 내용형으로 강등
         s["type"] = "bullets"
+    # 인지수준은 6수준 중 하나이거나 없음. 대괄호·설명이 붙어 와도 살려낸다.
+    lv = str(s.get("level") or "")
+    s["level"] = next((b for b in BLOOM_LEVELS if b in lv), "")
     return s
+
+
+def level_counts(plan: List[Dict]) -> Dict[str, int]:
+    """플랜의 인지수준 분포 — 교수자가 목표–자료 정렬을 눈으로 확인하는 값."""
+    out: Dict[str, int] = {}
+    for s in plan or []:
+        lv = (s or {}).get("level") if isinstance(s, dict) else None
+        if lv:
+            out[lv] = out.get(lv, 0) + 1
+    return {b: out[b] for b in BLOOM_LEVELS if b in out}
 
 
 _CHUNK = 14  # 청크당 슬라이드 수(토큰 잘림 방지)
@@ -642,7 +1413,7 @@ _CHUNK = 14  # 청크당 슬라이드 수(토큰 잘림 방지)
 
 def plan_from_outline(generate_fn: Callable[[str, str, int], str],
                       outline_md: str, deck_title: str,
-                      subtitle: str = "") -> List[Dict]:
+                      subtitle: str = "", course: str = "") -> List[Dict]:
     """개요를 슬라이드플랜으로 변환. 개요를 청크로 나눠 변환해 개수 잘림을 막는다.
 
     표지(cover)는 LLM이 아니라 여기서 맨 앞에 자동 추가한다. 청크가 실패하면
@@ -650,7 +1421,10 @@ def plan_from_outline(generate_fn: Callable[[str, str, int], str],
     """
     blocks = _outline_blocks(outline_md)
     if not blocks:
-        return _fallback_plan(outline_md, deck_title)
+        plan = _fallback_plan(outline_md, deck_title)
+        plan[0]["chip"] = subtitle
+        plan[0]["band"] = course
+        return plan
 
     chunks = [blocks[i:i + _CHUNK] for i in range(0, len(blocks), _CHUNK)]
     out: List[Dict] = []
@@ -662,17 +1436,18 @@ def plan_from_outline(generate_fn: Callable[[str, str, int], str],
         try:
             raw = generate_fn(_ART_SYS, user, 12000)
         except Exception as e:  # noqa: BLE001
-            print(f"[art] 청크 {ci + 1} 생성 오류: {e}", flush=True)
+            _log(f"[art] 청크 {ci + 1} 생성 오류: {e}")
             raw = ""
         arr = _extract_json_array(raw)
         got = [x for x in (_normalize_slide(s) for s in arr) if x] if isinstance(arr, list) else []
         # 개수가 모자라면 부족분을 블록 파싱으로 보충(개수 보존)
         if len(got) < len(ch):
-            print(f"[art] 청크 {ci + 1}: {len(got)}/{len(ch)} → 부족분 블록 폴백", flush=True)
+            _log(f"[art] 청크 {ci + 1}: {len(got)}/{len(ch)} → 부족분 블록 폴백")
             got += [_block_to_bullets(b) for b in ch[len(got):]]
         out += got[:len(ch)]
 
-    out.insert(0, {"type": "cover", "title": deck_title, "chip": subtitle})
+    out.insert(0, {"type": "cover", "title": deck_title, "chip": subtitle,
+                   "band": course})
     return out
 
 
@@ -686,20 +1461,49 @@ def image_queries(plan: List[Dict]) -> Dict[int, str]:
 
 
 # ── 이미지 생성 프롬프트 번들 (codex-prompt-img-studio 인풋 JSON) ──────────
-DEFAULT_STYLE_HINT = ("clean modern educational illustration, flat vector with subtle depth, "
-                      "soft navy (#1E2761) and amber (#F2A900) accents, uncluttered, 16:9")
+DEFAULT_STYLE_HINT = (
+    "clean modern educational illustration, flat vector with subtle depth, "
+    "consistent line weight, no gradient mesh, soft navy (#1E2761) and "
+    "amber (#F2A900) accents, generous negative space, uncluttered, 16:9")
 
 _IMGPROMPT_SYS = ("너는 강의 슬라이드용 이미지 생성 프롬프트 작가다. 각 슬라이드 제목/요약을 보고 "
                   "이미지 생성 모델(diffusion)용 **영어** 프롬프트 한 줄을 만든다. 그림 안에 글자·워터마크·"
                   "로고가 들어가지 않게 하고, 주제를 상징하는 구체적 장면/오브젝트로 묘사한다. "
                   "JSON 배열 [{\"n\":정수,\"prompt\":\"...\"}] 만 출력한다.")
 
+# 이미지를 실제로 '올릴 자리'가 있는 타입.
+#   photo   — 원래부터 사진 슬라이드
+#   bullets — 이미지가 들어오면 photo 로 승격(칩·불릿이 그대로 옆으로 간다)
+# cards/process/compare/table/quiz/objectives/agenda/closing/stat/section/cover 는
+# 도형 레이아웃이 자리를 다 쓰므로 이미지를 넣지 않는다.
+PLACEABLE_TYPES = ("photo", "bullets")
+
 
 def _prompt_place(s: Dict) -> bool:
-    """이미지를 실제로 배치할 슬라이드인가(학습목표·문제·퀴즈·표지·섹션 제외)."""
+    """이 슬라이드에 이미지를 실제로 배치할 것인가(프롬프트 JSON 의 place 값)."""
     if s.get("emphasis"):
         return False
-    return (s.get("type") or "bullets") not in ("cover", "section", "table")
+    return (s.get("type") or "bullets") in PLACEABLE_TYPES
+
+
+def apply_images(plan: List[Dict], images: Dict[int, bytes]):
+    """외부 이미지를 플랜에 붙인다. bullets 슬라이드는 photo 로 승격.
+
+    반환: (새 플랜, 사용된 {인덱스: 바이트}, 자리 없어 건너뛴 1-based 번호 목록)
+    이미지를 조용히 버리지 않고 무엇이 안 들어갔는지 항상 돌려준다.
+    """
+    out, used, skipped = [], {}, []
+    for i, s in enumerate(plan or []):
+        s = dict(s) if isinstance(s, dict) else {"type": "bullets", "title": str(s)}
+        if i in (images or {}):
+            typ = (s.get("type") or "bullets").lower()
+            if typ in PLACEABLE_TYPES:
+                s["type"] = "photo"
+                used[i] = images[i]
+            else:
+                skipped.append(i + 1)
+        out.append(s)
+    return out, used, skipped
 
 
 def image_prompt_bundle(plan: List[Dict], deck_title: str, *,
@@ -708,8 +1512,8 @@ def image_prompt_bundle(plan: List[Dict], deck_title: str, *,
     """덱 전체 슬라이드의 이미지 생성 프롬프트를 1개 번들(dict)로.
 
     generate_fn 이 있으면 LLM으로 영어 프롬프트를 짓고(청크·폴백), 없으면
-    image_query/제목 기반으로 결정론적으로 만든다. codex-prompt-img-studio 가
-    'prompts' 배열을 위→아래 순차 실행하도록 설계.
+    image_query/제목 기반으로 결정론적으로 만든다. 'prompts' 배열은 위→아래
+    순차 실행용이고, "n" 은 1-based 슬라이드 번호 = 이미지 파일명 규칙의 번호다.
     """
     n = len(plan)
     en: Dict[int, str] = {}
@@ -725,7 +1529,8 @@ def image_prompt_bundle(plan: List[Dict], deck_title: str, *,
             try:
                 arr = _extract_json_array(generate_fn(_IMGPROMPT_SYS, user, 6000))
             except Exception as e:  # noqa: BLE001
-                print(f"[imgprompt] 청크 오류: {e}", flush=True); arr = None
+                _log(f"[imgprompt] 청크 오류: {e}")
+                arr = None
             if isinstance(arr, list):
                 for o in arr:
                     if isinstance(o, dict) and o.get("n") and o.get("prompt"):
@@ -733,12 +1538,17 @@ def image_prompt_bundle(plan: List[Dict], deck_title: str, *,
 
     prompts = []
     for i, s in enumerate(plan):
-        subj = en.get(i) or s.get("image_query") or f"conceptual illustration for '{s.get('title', '')}'"
+        subj = (en.get(i) or s.get("image_query")
+                or f"conceptual illustration for '{s.get('title', '')}'")
+        subj = str(subj).strip().rstrip(".").strip()       # 마침표 중복 방지
         prompt = f"{subj}. {style_hint}. No text, no watermark, no logo."
         prompts.append({
             "n": i + 1,
             "title": s.get("title", ""),
             "type": s.get("type", "bullets"),
+            # 인지수준을 함께 흘린다 — 이 번들이 슬라이드→비디오 단계의 입력이라,
+            # 씬별 나레이션 길이·속도를 정할 근거가 된다(기억<이해<분석 순으로 체류).
+            "level": s.get("level", ""),
             "prompt": prompt,
             "negative": "text, letters, watermark, logo, low quality, distorted",
             "keywords": ([s["image_query"]] if s.get("image_query") else []),
@@ -749,5 +1559,8 @@ def image_prompt_bundle(plan: List[Dict], deck_title: str, *,
         "style_hint": style_hint,
         "aspect": "landscape",
         "count": n,
+        "file_naming": ("생성한 이미지는 images/ 폴더에 '슬라이드번호'로 저장하세요. "
+                        "예: 003.png → 3번 슬라이드. 파일명 앞 숫자만 맞으면 되고 "
+                        "확장자·뒤 설명은 자유입니다(003_뇌구조.png)."),
         "prompts": prompts,
     }

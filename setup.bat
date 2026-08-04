@@ -45,6 +45,9 @@ if not exist ".env" (
   echo [setup] Created .env from .env.example
 )
 
+rem Slide font (Pretendard, OFL). Optional - app falls back to Malgun Gothic.
+python tools\get_fonts.py
+
 echo.
 echo ============================================
 echo  Setup complete. Double-click run.bat to start.

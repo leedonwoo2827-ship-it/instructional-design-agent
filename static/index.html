@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>교수설계 가이드 에이전트</title>
+<meta name="description" content="강의계획서 · 교재 · 슬라이드를 만드는 교수설계 로컬 콘솔" />
+<meta name="color-scheme" content="light" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231668c1'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='15' font-weight='700' fill='%23ffffff' text-anchor='middle'%3E%EA%B5%90%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+<!-- ══ Layer 0 — 베이스 (좌측 레일 + 작업 본문) ══════════════════════════ -->
+<div class="app">
+  <nav class="rail" id="rail" aria-label="주 메뉴">
+    <div class="side-brand">
+      <button class="brand-mark" id="brand-mark" type="button" title="메뉴 펼치기">교수설계</button>
+      <span class="brand-name">에이전트</span>
+      <button class="rail-toggle" id="rail-toggle" type="button"
+              title="메뉴 접기 (Ctrl+B)" aria-label="메뉴 접기">
+        <span data-icon="panelLeft" data-icon-size="16"></span>
+      </button>
+    </div>
+
+    <!-- 이 앱의 존재 이유는 '다음 주차를 만드는 것'이다. 전역 기본 액션을 거기 붙인다. -->
+    <button class="btn-new" id="btn-next-week" type="button">
+      <span data-icon="arrowRight" data-icon-size="15"></span>
+      <span>다음 미작성 주차</span>
+    </button>
+
+    <ul class="side-nav" id="side-nav">
+      <!-- 강좌 전체 단계 — 주차 개념이 없다. 여기서 목표·평가·주차가 정해진다. -->
+      <li><a href="#/syllabus" data-nav="syl" title="강의계획서 (강좌 전체)">
+        <span data-icon="file"></span><span>강의계획서 <em class="nav-dest">강좌 전체</em></span></a></li>
+
+      <!-- ★ 경계 — 위는 강좌 단위, 아래는 주차 단위(15개).
+           아래 화면들은 강의계획서가 있어야 열린다. 그 차이가 커서 같은 목록에
+           붙여 두면 "왜 저건 안 열리나" 를 매번 다시 겪는다. -->
+      <li class="side-nav-sep" aria-hidden="true"></li>
+
+      <li><a href="#/textbook" data-nav="doc" title="교재 (주차별)">
+        <span data-icon="book"></span><span>교재 <em class="nav-dest">주차별</em></span></a></li>
+      <li><a href="#/slides" data-nav="ppt" title="슬라이드 (주차별)">
+        <span data-icon="slide"></span><span>슬라이드 <em class="nav-dest">주차별</em></span></a></li>
+    </ul>
+
+    <!-- 강좌를 고르기 전에는 강좌 목록, 고른 뒤에는 주차 목록이 된다.
+         슬라이드는 주차마다 여러 번 빌드하므로 진행 상태가 늘 보여야 한다. -->
+    <div class="side-section">
+      <span class="side-section-title" id="side-section-title">최근 강좌</span>
+      <button class="side-section-more" id="side-section-more" type="button"
+              data-go="/courses">전체</button>
+    </div>
+    <div class="side-recent" id="side-recent">
+      <div class="side-empty">아직 강좌가 없습니다.</div>
+    </div>
+
+    <div class="rail-wrap">
+      <!-- 좌하단 칩 = 워크스페이스. 강좌 전환 · 강의 기본 정보 · 연결 설정이 여기로. -->
+      <button class="side-user" id="side-user" type="button"
+              aria-haspopup="dialog" aria-expanded="false" title="워크스페이스 — 강좌 · 강의 정보 · 연결 설정">
+        <span class="su-avatar" id="su-avatar">교수</span>
+        <span class="su-text">
+          <span class="su-name" id="su-name">강좌를 고르세요</span>
+          <span class="su-team" id="su-team">—</span>
+        </span>
+        <span data-icon="chevronUp" data-icon-size="14"></span>
+      </button>
+    </div>
+  </nav>
+
+  <main class="content" id="view" tabindex="-1"></main>
+</div>
+
+<!-- ══ Layer 1 — 부유 패널 (목록 = 고르는 곳). panel.js 가 만든다. ══════════ -->
+<div class="panel-layer" id="panel-layer" hidden></div>
+
+<!-- ══ Layer 2 — 토스트 ═══════════════════════════════════════════════════ -->
+<div class="toast" id="toast" hidden></div>
+
+<script type="module" src="/static/js/shell.js"></script>
+</body>
+</html>

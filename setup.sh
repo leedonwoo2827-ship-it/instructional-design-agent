@@ -14,5 +14,8 @@ if [ ! -f ".env" ]; then
   cp .env.example .env
   echo "Created .env from .env.example"
 fi
+
+# 슬라이드 폰트(Pretendard, OFL). 실패해도 앱은 맑은 고딕으로 동작한다.
+python tools/get_fonts.py || true
 echo
 echo "Setup complete. Run ./run.sh to start. Enter your LiteLLM API key in the app sidebar."

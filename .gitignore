@@ -22,8 +22,16 @@ assets/*.jpg
 # 생성 산출물(교재·PPT·강의계획서 등) — 커밋 금지
 _assets/
 
-# 원본 첨삭 자료 — 내부용, 커밋 금지 (반영 결과는 skills/·docs/에 반영)
+# 주차별 산출물 아카이브(01/ 02/ … 15/) — 로컬 전용
+workspace/
+
+# 슬라이드 폰트(Pretendard OFL) — 용량이 커 커밋 제외. setup 시 내려받는다
+assets/fonts/
+static/fonts/
+
+# 원본 첨삭 자료·작업용 샘플 — 내부용, 커밋 금지 (반영 결과는 skills/·docs/에 반영)
 _guideline/
+_guide-260710/
 
 # 사내 자료·원본·키 포함 — GitHub 업로드 금지
 _context/

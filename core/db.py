@@ -74,6 +74,35 @@ def create_project(name: str) -> int:
         return int(cur.lastrowid)
 
 
+def restore_project(pid: int, name: str, *, form: Optional[Dict[str, Any]] = None,
+                    syllabus_md: str = "") -> bool:
+    """workspace 폴더만 남은 강좌를 **원래 id 로** DB 에 되살린다.
+
+    id 를 보존해야 하는 이유: 폴더명이 `04_이름` 처럼 id 를 접두어로 쓰므로,
+    새 id 로 만들면 기존 폴더를 못 찾고 빈 강좌가 하나 더 생긴다.
+    이미 그 id 가 있으면 아무것도 하지 않고 False.
+    """
+    ts = _now()
+    with _connect() as conn:
+        if conn.execute("SELECT 1 FROM projects WHERE id=?", (pid,)).fetchone():
+            return False
+        conn.execute(
+            "INSERT INTO projects (id, name, created_at, updated_at, form_json, syllabus_md)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (int(pid), name or "새 강의", ts, ts,
+             json.dumps(form or {}, ensure_ascii=False), syllabus_md or ""),
+        )
+        # AUTOINCREMENT 다음 값이 되살린 id 보다 작으면 충돌한다 — 시퀀스를 올린다.
+        conn.execute(
+            "INSERT INTO sqlite_sequence (name, seq) SELECT 'projects', ?"
+            " WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name='projects')",
+            (int(pid),))
+        conn.execute(
+            "UPDATE sqlite_sequence SET seq=? WHERE name='projects' AND seq<?",
+            (int(pid), int(pid)))
+    return True
+
+
 def load_project(pid: int) -> Optional[Dict[str, Any]]:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()

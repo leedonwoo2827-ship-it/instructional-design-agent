@@ -25,7 +25,8 @@ ICON_CHART = _icon('<path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="7
 
 # Bloom 인지수준 6단계 (저차 → 고차)
 BLOOM = ["기억", "이해", "적용", "분석", "평가", "창조"]
-BLOOM_SHADES = ["#c7cdf0", "#aab3e9", "#8d98e0", "#6d7ad4", "#4f5ec9", "#3b4ec8"]
+# 순서값이므로 단일 색조 계조(스카이블루) — 범주형 색 섞지 않는다
+BLOOM_SHADES = ["#cfe4f7", "#a9cfef", "#7db4e4", "#4a9be0", "#2a7fcd", "#1668c1"]
 
 
 def bloom_counts(md: str) -> Dict[str, int]:
