@@ -2,9 +2,9 @@
  *
  *   1 개요          강의계획서 → 슬라이드 목록·본문 (md)
  *   2 초안 PPT      개요 → 레이아웃 배정 → 사진 없는 .pptx
- *   3 비주얼 정돈   주제 사진 수집·배치 → 재빌드
- *   4 씬 프롬프트   슬라이드별 이미지 생성 프롬프트 (JSON)
- *   5 이미지 합치기 만들어 온 이미지 + 자동 사진 → 최종본
+ *   3 사진원고 서칭/추가  주제 사진 수집·배치 → 재빌드   ★ 지금은 꺼 둠 (off: true)
+ *   4 씬 프롬프트 생성      슬라이드별 이미지 생성 프롬프트 (JSON)
+ *   5 이미지 합치기 및 최종 PPTX  만들어 온 이미지 + 자동 사진 → 최종본
  *
  * 한 버튼이 전부 하던 것을 쪼갠 이유: 아트디렉터 LLM·사진 검색·빌드·프롬프트가
  * 한 덩어리라 하나만 틀려도 전부 다시 돌려야 했다. 지금은 사진만 다시 받거나
@@ -24,7 +24,7 @@ import { weekBar, guard } from "./weekbar.js";
 
 export const meta = {
   title: "슬라이드",
-  subtitle: "개요 → 초안 → 비주얼 → 씬 프롬프트 → 합치기. 단계마다 파일로 남습니다.",
+  subtitle: "개요 → 초안 → 씬 프롬프트 → 합치기. 단계마다 파일로 남습니다.",
 };
 
 /* 단계 정의 — 제목은 짧게, out 은 '어느 폴더에 무엇이 남는가'.
@@ -42,19 +42,22 @@ const STEPS = [
     out: "02_초안/슬라이드플랜.json · 슬라이드_v1.pptx",
   },
   {
-    key: "visual", no: 3, title: "비주얼 정돈", iconName: "image",
+    // ★ 이 단계만 꺼 둔다. 되살리려면 off 를 false 로 (서버 라우트는 그대로 살아 있다).
+    //   끄면 4단계가 '자동 사진이 없는' 상태로 보므로 배치 대상 전부의 프롬프트가 나온다 —
+    //   사진을 찾지 않고 전부 직접 그리는 흐름이 이렇게 된다.
+    key: "visual", no: 3, title: "사진원고 서칭/추가", iconName: "image", off: true,
     desc: "photo 로 배정된 슬라이드에 주제 사진을 수집해 배치하고 다시 빌드합니다. " +
           "받은 사진은 assets/ 에 보관해 재빌드 때 다시 받지 않습니다.",
     out: "03_비주얼/assets/ · 슬라이드_v1.pptx · 이미지출처.txt",
   },
   {
-    key: "prompts", no: 4, title: "씬 프롬프트", iconName: "clipboard",
+    key: "prompts", no: 4, title: "씬 프롬프트 생성", iconName: "clipboard",
     desc: "슬라이드(씬)별 이미지 생성 프롬프트를 영어로 뽑습니다. 밖에서 이미지를 " +
           "만들어 올 때 쓰는 입력입니다.",
     out: "04_씬프롬프트/이미지프롬프트.json",
   },
   {
-    key: "merge", no: 5, title: "이미지 합치기", iconName: "wand",
+    key: "merge", no: 5, title: "이미지 합치기 및 최종 PPTX", iconName: "wand",
     desc: "05_합치기/assets/ 에 슬라이드 번호로 넣어 둔 이미지를 삽입합니다. " +
           "자동 사진 위에 내 이미지가 덮이고, 자리 없는 레이아웃은 건너뜁니다.",
     out: "05_합치기/assets/ · 슬라이드_v1.pptx",
@@ -276,37 +279,53 @@ export async function mount(root, ctx) {
       nodes.draft.extra.textContent = lines.join("      ");
     }
 
-    // 3 비주얼 정돈
-    markState("visual", !hasPlan ? "locked" : nPhoto ? "done" : "ready",
-              !hasPlan ? "초안 먼저" : nPhoto ? `사진 ${nPhoto}/${slots}` : `자리 ${slots}곳`);
+    // 3 사진원고 서칭/추가 — 꺼 두었다(STEPS 의 off). 자리는 2단계에서 이미 잡혀 있고,
+    //   사진은 찾지 않고 4단계에서 전부 직접 그린다.
+    const visualOff = !!STEPS.find((s) => s.key === "visual").off;
     nodes.visual.act.innerHTML = "";
-    nodes.visual.act.appendChild(btn(nPhoto ? "다시 빌드" : "사진 수집·배치", {
-      primary: hasPlan && !nPhoto, iconName: "image", lock: !hasPlan,
-      title: "보관된 사진을 재사용합니다.",
-      onClick: () => runStep("/api/slides/visual", {}, "비주얼 정돈",
-        (d) => `사진 ${d.photos}/${d.slots}장 배치 (재사용 ${d.reused}) · ${d.file}`),
-    }));
-    if (nPhoto) {
-      nodes.visual.act.appendChild(btn("사진 새로 받기", {
-        iconName: "image", lock: !hasPlan,
-        title: "보관된 사진을 버리고 다시 검색합니다.",
-        onClick: () => {
-          if (!confirm("보관된 사진을 버리고 다시 검색합니다. 계속할까요?")) return;
-          runStep("/api/slides/visual", { refetch: true }, "비주얼 정돈",
-            (d) => `사진 ${d.photos}/${d.slots}장 새로 받음 · ${d.file}`);
-        },
+    if (visualOff) {
+      markState("visual", "locked", "사용 안 함");
+      nodes.visual.act.appendChild(btn("사진 수집·배치", {
+        iconName: "image", lock: true,
+        title: "지금은 쓰지 않습니다. 사진 자리는 2단계에서 잡히고, 그림은 4·5단계에서 넣습니다.",
       }));
+      nodes.visual.extra.hidden = false;
+      nodes.visual.extra.textContent = nPhoto
+        ? `꺼 둔 단계입니다. 예전에 받아 둔 사진 ${nPhoto}장은 ${cur.photos_dir} 에 그대로 있습니다.`
+        : "꺼 둔 단계입니다. 사진을 자동으로 찾지 않고, 배치 대상 전부를 4단계 프롬프트로 뽑아 직접 그립니다.";
+    } else {
+      markState("visual", !hasPlan ? "locked" : nPhoto ? "done" : "ready",
+                !hasPlan ? "초안 먼저" : nPhoto ? `사진 ${nPhoto}/${slots}` : `자리 ${slots}곳`);
+      nodes.visual.act.appendChild(btn(nPhoto ? "다시 빌드" : "사진 수집·배치", {
+        primary: hasPlan && !nPhoto, iconName: "image", lock: !hasPlan,
+        title: "보관된 사진을 재사용합니다.",
+        onClick: () => runStep("/api/slides/visual", {}, "사진원고 서칭/추가",
+          (d) => `사진 ${d.photos}/${d.slots}장 배치 (재사용 ${d.reused}) · ${d.file}`),
+      }));
+      if (nPhoto) {
+        nodes.visual.act.appendChild(btn("사진 새로 받기", {
+          iconName: "image", lock: !hasPlan,
+          title: "보관된 사진을 버리고 다시 검색합니다.",
+          onClick: () => {
+            if (!confirm("보관된 사진을 버리고 다시 검색합니다. 계속할까요?")) return;
+            runStep("/api/slides/visual", { refetch: true }, "사진원고 서칭/추가",
+              (d) => `사진 ${d.photos}/${d.slots}장 새로 받음 · ${d.file}`);
+          },
+        }));
+      }
+      nodes.visual.extra.hidden = !nPhoto;
+      if (nPhoto) nodes.visual.extra.textContent = `보관 위치: ${cur.photos_dir}`;
     }
-    nodes.visual.extra.hidden = !nPhoto;
-    if (nPhoto) nodes.visual.extra.textContent = `보관 위치: ${cur.photos_dir}`;
 
-    // 4 씬 프롬프트
+    // 4 씬 프롬프트 생성
     markState("prompts", !hasPlan ? "locked" : hasPrompt ? "done" : "ready",
               !hasPlan ? "초안 먼저" : hasPrompt ? "추출됨" : "대기");
     nodes.prompts.act.innerHTML = "";
     nodes.prompts.act.appendChild(btn(hasPrompt ? "다시 추출" : "프롬프트 추출", {
       primary: hasPlan && !hasPrompt, iconName: "clipboard", lock: !hasPlan,
-      onClick: () => runStep("/api/slides/prompts", {}, "씬 프롬프트",
+      // 3단계를 껐으면 사진 자리 전부를 뽑는다. 예전에 받아 둔 사진 때문에 자리를
+      // 빼 버리면 사진도 그림도 없는 슬라이드가 조용히 남는다.
+      onClick: () => runStep("/api/slides/prompts", { all_slots: visualOff }, "씬 프롬프트",
         (d) => `프롬프트 ${d.count}개 (배치 대상 ${d.placeable}개)`),
     }));
     if (hasPrompt) {
@@ -326,7 +345,7 @@ export async function mount(root, ctx) {
         : "JSON 을 읽을 수 없습니다.";
     }
 
-    // 5 이미지 합치기
+    // 5 이미지 합치기 및 최종 PPTX
     markState("merge", !hasPlan ? "locked" : nMine ? "ready" : "locked",
               !hasPlan ? "초안 먼저" : nMine ? `내 이미지 ${nMine}장` : "폴더 비어 있음");
     nodes.merge.act.innerHTML = "";

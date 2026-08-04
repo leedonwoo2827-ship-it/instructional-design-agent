@@ -664,9 +664,10 @@ def api_gen_week(body: Dict[str, Any] = Body(...)):
 #
 #   1 개요          /api/gen/week (format=ppt)   개요 md
 #   2 초안 PPT      /api/slides/draft            플랜 JSON + 사진 없는 .pptx
-#   3 비주얼 정돈   /api/slides/visual           주제 사진 수집·보관 → 재빌드
-#   4 씬 프롬프트   /api/slides/prompts          슬라이드별 이미지 생성 프롬프트
-#   5 이미지 합치기 /api/slides/merge            내 이미지 + 자동 사진 → 최종본
+#   3 사진원고 서칭/추가  /api/slides/visual    주제 사진 수집·보관 → 재빌드
+#     ★ 화면에서 꺼 두었다(week-ppt.js 의 off). 라우트는 그대로 살아 있다.
+#   4 씬 프롬프트 생성    /api/slides/prompts   슬라이드별 이미지 생성 프롬프트
+#   5 이미지 합치기 및 최종 PPTX  /api/slides/merge   내 이미지 + 자동 사진 → 최종본
 #
 # 한 버튼이 전부 하던 것을 쪼갠 이유: 아트디렉터 LLM·사진 검색·빌드·프롬프트가
 # 한 덩어리라 하나만 틀려도 전부(LLM 호출까지) 다시 돌려야 했다. 단계가 갈리면
@@ -738,7 +739,7 @@ def api_slides_draft(body: Dict[str, Any] = Body(...)):
     return stream_job(work)
 
 
-# ── 3 비주얼 정돈 — 주제 사진 수집·보관 → 재빌드 ────────────────────────────
+# ── 3 사진원고 서칭/추가 — 주제 사진 수집·보관 → 재빌드 ────────────────────────────
 @app.post("/api/slides/visual")
 def api_slides_visual(body: Dict[str, Any] = Body(...)):
     pid, week = int(body["project_id"]), int(body["week"])
@@ -791,7 +792,7 @@ def api_slides_visual(body: Dict[str, Any] = Body(...)):
     return stream_job(work)
 
 
-# ── 4 씬 프롬프트 — 슬라이드별 이미지 생성 프롬프트 ─────────────────────────
+# ── 4 씬 프롬프트 생성 — 슬라이드별 이미지 생성 프롬프트 ─────────────────────────
 @app.post("/api/slides/prompts")
 def api_slides_prompts(body: Dict[str, Any] = Body(...)):
     pid, week = int(body["project_id"]), int(body["week"])
@@ -799,17 +800,26 @@ def api_slides_prompts(body: Dict[str, Any] = Body(...)):
     plan = _need_plan(pid, p["name"], week)
     title = deck_stem(p["form"] or {}, week)
 
+    # 3단계(사진 서칭)를 껐을 때는 자리 전부를 뽑아야 한다.
+    #
+    # ★ 안 그러면 조용히 빈 자리가 남는다: 03_비주얼/assets 에 예전 사진이 남아 있어도
+    #   지금 덱은 2단계 초안(사진 없음)이다. 그 번호를 제외해 버리면 사진도 그림도
+    #   없는 슬라이드가 되고, 4·5단계를 다 돌려도 아무 경고가 없다.
+    #   초안을 다시 설계했다면 슬라이드 번호까지 어긋난다.
+    all_slots = bool(body.get("all_slots"))
+
     def work(emit):
         # 자동 사진이 이미 붙은 슬롯은 그릴 필요가 없다 — 03_비주얼/assets 를 스캔해
         # 있는 번호를 제외하고, "자리는 있는데 사진을 못 찾은 것" 만 프롬프트로 뽑는다.
-        pdir = ws.assets_dir(pid, p["name"], week, "visual", create=False)
         have = set()
-        if pdir.is_dir():
+        pdir = ws.assets_dir(pid, p["name"], week, "visual", create=False)
+        if not all_slots and pdir.is_dir():
             for f in pdir.iterdir():
                 m = re.match(r"^(\d{1,3})", f.stem)
                 if f.is_file() and m:
                     have.add(int(m.group(1)) - 1)      # 파일명은 1-based
-        emit("status", {"message": f"씬 프롬프트 작성 중… (자동 사진 {len(have)}장은 제외)"})
+        emit("status", {"message": "씬 프롬프트 작성 중…" + (
+            " (사진 자리 전부)" if all_slots else f" (자동 사진 {len(have)}장은 제외)")})
         bundle = deck_builder.image_prompt_bundle(
             plan, title, generate_fn=_art_gen_fn(), have_photos=have)
         ws.save_week(pid, p["name"], week,
@@ -822,7 +832,7 @@ def api_slides_prompts(body: Dict[str, Any] = Body(...)):
     return stream_job(work)
 
 
-# ── 5 이미지 합치기 — 내 이미지 + 자동 사진 → 최종본 ────────────────────────
+# ── 5 이미지 합치기 및 최종 PPTX — 내 이미지 + 자동 사진 → 최종본 ────────────────────────
 @app.post("/api/slides/merge")
 def api_slides_merge(body: Dict[str, Any] = Body(...)):
     pid, week = int(body["project_id"]), int(body["week"])
