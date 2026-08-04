@@ -386,25 +386,50 @@ async function secForm(box, ctx, cfg) {
 /* ── 연결 설정 ────────────────────────────────────── */
 async function secConn(box, ctx, cfg) {
   const s = cfg.settings;
+  const isCli = (s.provider || "cli") !== "litellm";
   const c = el("div", "card");
   const t = el("div", "card-title");
-  t.append(el("span", null, "Ubion LiteLLM"),
-           el("span", "badge" + (s.api_key ? " ok" : " warn"), s.api_key ? "키 있음" : "키 없음"));
+  // CLI 는 키가 필요 없다 — 배지는 '무엇이 준비됐는가' 를 말해야 한다.
+  const ok = isCli ? !!cfg.cli_available : !!s.api_key;
+  t.append(el("span", null, isCli ? "Claude Code CLI" : "Ubion LiteLLM"),
+           el("span", "badge" + (ok ? " ok" : " warn"),
+              isCli ? (ok ? "CLI 확인됨" : "CLI 없음") : (ok ? "키 있음" : "키 없음")));
   c.appendChild(t);
 
+  const prov = select(Object.entries(cfg.providers || {}), s.provider || "cli");
   const url = input(s.base_url, { placeholder: "http://192.168.50.119:4000" });
   const key = input(s.api_key, { type: "password", placeholder: "sk-..." });
   const model = select(Object.entries(cfg.models), s.model);
   const uns = input(s.unsplash_key, { type: "password" });
 
-  c.append(
+  c.append(field("LLM 연결 방식", prov,
+    "CLI 는 이 PC 의 Claude Code 로그인(구독)을 그대로 씁니다 — API 키 발급·과금이 없습니다."));
+
+  const proxyRows = el("div");
+  proxyRows.append(
     field("LiteLLM URL", url, "사내망에서만 접속됩니다."),
     field("API 키", key, "사내 대시보드(/ui/)에서 발급한 sk- 키."),
+  );
+  proxyRows.style.display = isCli ? "none" : "";
+  c.appendChild(proxyRows);
+
+  c.append(
     field("모델", model,
-      "디자인 슬라이드의 구조화(JSON) 작업은 형식 안정성을 위해 비추론 모델을 자동으로 씁니다."),
+      isCli ? "CLI 기본 모델을 권장합니다. 구조화(JSON) 작업은 형식 안정성을 위해 비추론 모델을 자동으로 씁니다."
+            : "디자인 슬라이드의 구조화(JSON) 작업은 형식 안정성을 위해 비추론 모델을 자동으로 씁니다."),
     field("Unsplash Access Key (선택)", uns,
       "넣으면 슬라이드 사진을 Unsplash(고품질)에서 가져옵니다. 비우면 Openverse(무료 CC)로 동작."),
   );
+
+  // 방식을 바꾸면 모델 목록이 달라진다 → 저장 후 다시 그린다.
+  prov.addEventListener("change", async () => {
+    try {
+      await saveSettings({ provider: prov.value });
+      ctx.navigate("/workspace");
+      toast(prov.value === "litellm" ? "LiteLLM 프록시로 바꿨습니다."
+                                     : "Claude Code CLI 로 바꿨습니다.", "ok");
+    } catch (e) { toast("저장하지 못했습니다: " + e.message, "err"); }
+  });
 
   const row = el("div", "btn-row");
   const save = el("button", "btn primary");
@@ -420,6 +445,7 @@ async function secConn(box, ctx, cfg) {
     save.disabled = true;
     try {
       await saveSettings({
+        provider: prov.value,
         base_url: url.value.trim(), api_key: key.value.trim(),
         model: model.value, unsplash_key: uns.value.trim(),
       });
