@@ -1,11 +1,16 @@
-# .bat 은 CP949 + CRLF 다. git 이 줄바꿈을 건드리면 cmd.exe 가 인수를 못 읽어
-# 서버가 안 뜬다(전례 있음). 바이트를 그대로 보존한다.
-*.bat -text
+# ★ 뒤에 나온 규칙이 이긴다. 넓은 규칙을 먼저 쓰고 예외를 나중에 쓴다.
+#   반대로 쓰면 `* text=auto` 가 아래 예외들을 전부 덮어쓴다.
 
-# 나머지는 작업 트리에서 CRLF, 저장소에는 LF
 * text=auto
+
 *.pptx binary
 *.png binary
 *.jpg binary
 *.mp4 binary
 *.wav binary
+*.onnx binary
+
+# .bat 은 CP949 + CRLF 다. 저장소에 LF 로 눕혀 두면 autocrlf 가 꺼진 환경에서
+# LF 그대로 체크아웃돼 cmd.exe 가 --port 인수를 못 읽는다(서버가 안 뜬 전례).
+# 바이트를 그대로 보존한다.
+*.bat -text
