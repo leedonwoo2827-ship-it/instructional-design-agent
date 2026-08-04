@@ -97,8 +97,22 @@ export async function mount(root, ctx) {
   }));
 
   grid.appendChild(card({
+    title: "영상",
+    desc: "슬라이드플랜으로 나레이션 대본을 쓰고, 로컬 음성·자막을 붙여 강의 영상(mp4)으로 만듭니다.",
+    hint: "위에 목록 창이 뜹니다",
+    iconName: "film",
+    tone: hasSyl ? (done("video") ? "ok" : "") : "idle",
+    disabled: !hasSyl,
+    metaNodes: hasSyl
+      ? [badge(`대본 ${done("script")} / ${weeks.n_weeks}`),
+         badge(`영상 ${done("video")} / ${weeks.n_weeks}`, done("video") ? "brand" : "")]
+      : [],
+    onClick: () => ctx.navigate("/video/pick"),
+  }));
+
+  grid.appendChild(card({
     title: "워크스페이스",
-    desc: "강좌 전환 · 강의 기본 정보 · LiteLLM 연결 설정 · 회사 PPT 양식.",
+    desc: "강좌 전환 · 강의 기본 정보 · LLM 연결 방식 · 회사 PPT 양식.",
     hint: "좌하단 칩에서도 열립니다",
     iconName: "settings",
     onClick: () => ctx.navigate("/workspace"),
@@ -132,6 +146,7 @@ export function weekCell(w, ctx, { onPick } = {}) {
   mk(w.ppt ? "on" : "");
   mk(w.deck ? "on" : w.plan ? "part" : "");
   mk(w.images ? "on" : "");
+  mk(w.video ? "on" : w.script ? "part" : "");
   if (w.deck) dots.appendChild(el("span", "badge brand", "v" + w.deck));
   b.appendChild(dots);
   b.addEventListener("click", () => {
@@ -150,6 +165,6 @@ export function legend() {
     return s;
   };
   l.append(one("on", "완료"), one("part", "진행"), one("", "미완"),
-           el("span", null, "순서: 교재 · 개요 · 덱 · 이미지"));
+           el("span", null, "순서: 교재 · 개요 · 덱 · 이미지 · 영상"));
   return l;
 }

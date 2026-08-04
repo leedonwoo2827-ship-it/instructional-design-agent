@@ -50,3 +50,5 @@ SYS_SCRIPT_DOC = _compose("gyosu-base", "textbook")
 SYS_SCRIPT_PPT = _compose("gyosu-base", "slides")
 SYS_CHECK_SYL = _compose("gyosu-base", "check-syllabus")
 SYS_CHECK_SCR = _compose("gyosu-base", "check-script")
+# 영상 나레이션 — 음성 합성 전제라 문체·기호 규칙이 다르다(gyosu-base 의 마크다운 지시와 충돌하므로 단독).
+SYS_NARRATION = _compose("narration")

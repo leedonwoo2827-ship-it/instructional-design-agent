@@ -50,8 +50,10 @@ STEPS: Dict[str, Tuple[str, str]] = {
     "visual":  ("03_비주얼", "비주얼 정돈"),
     "prompts": ("04_씬프롬프트", "씬 프롬프트"),
     "merge":   ("05_합치기", "이미지 합치기"),
+    "video":   ("06_영상", "영상"),
 }
-# 덱(.pptx)이 나오는 단계 — 최신순으로 볼 때의 우선순위이기도 하다
+# 덱(.pptx)이 나오는 단계 — 최신순으로 볼 때의 우선순위이기도 하다.
+# ★ video 는 .pptx 를 만들지 않으므로 여기 넣지 않는다(덱 버전 계산이 깨진다).
 DECK_STEPS = ("merge", "visual", "draft")
 
 F_DOC = "교재.md"
@@ -60,6 +62,13 @@ F_PLAN = "슬라이드플랜.json"
 F_PROMPT = "이미지프롬프트.json"
 F_MSGS = "대화.json"
 F_CREDITS = "이미지출처.txt"
+# 영상 — 나레이션 대본이 유일한 진실이다. 앱과 Claude Code 창이 같은 파일을 고친다.
+F_SCRIPT = "나레이션.json"
+F_JOB = "job.json"
+F_PROGRESS = "progress.json"
+VIDEO_SLIDES = "슬라이드"      # 06_영상/슬라이드/001.png  (PowerPoint 로 뽑은 PNG)
+VIDEO_BUNDLE = "번들"          # 06_영상/번들/chNN/…       (chodangi 번들)
+VIDEO_OUT = "완성"             # 06_영상/완성/영상_v1.mp4
 
 _IMG_EXT = (".png", ".jpg", ".jpeg", ".webp")
 _BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -185,6 +194,76 @@ def save_week(pid: int, name: str, week: int, *,
         _write_json(step_dir(pid, name, week, "draft") / F_PLAN, _clean_plan(plan))
     if img_prompt is not None and str(img_prompt).strip():
         _write_text(step_dir(pid, name, week, "prompts") / F_PROMPT, img_prompt)
+
+
+# ── 영상 ───────────────────────────────────────────────────────────────────
+def video_dir(pid: int, name: str, week: int, *, create: bool = True) -> Path:
+    return step_dir(pid, name, week, "video", create=create)
+
+
+def video_sub(pid: int, name: str, week: int, which: str, *, create: bool = True) -> Path:
+    d = video_dir(pid, name, week, create=create) / which
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def script_path(pid: int, name: str, week: int, *, create: bool = False) -> Path:
+    return video_dir(pid, name, week, create=create) / F_SCRIPT
+
+
+def load_script(pid: int, name: str, week: int) -> Dict[str, Any]:
+    return _read_json(script_path(pid, name, week), {}) or {}
+
+
+def save_script(pid: int, name: str, week: int, doc: Dict[str, Any]) -> Path:
+    """나레이션 대본 저장 — **내용이 같으면 쓰지 않고, 다르면 .bak 을 남긴다.**
+
+    이 파일은 앱과 Claude Code 창이 함께 쓴다. 그냥 덮어쓰면 창에서 다듬은 내용을
+    날린다. 그래서 무조건 쓰기가 아니라 비교 후 쓰기다.
+    """
+    p = script_path(pid, name, week, create=True)
+    new = json.dumps(doc, ensure_ascii=False, indent=2)
+    if p.is_file():
+        old = _read_text(p)
+        if old == new:
+            return p
+        (p.parent / (F_SCRIPT + ".bak")).write_text(old, encoding="utf-8")
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(new, encoding="utf-8")
+    tmp.replace(p)
+    return p
+
+
+def video_versions(pid: int, name: str, week: int) -> List[Path]:
+    """완성 영상 목록(오름차순). 덱과 달리 .mp4 라 DECK_STEPS 와 섞지 않는다."""
+    d = video_sub(pid, name, week, VIDEO_OUT, create=False)
+    if not d.is_dir():
+        return []
+    out = []
+    for p in d.glob("*.mp4"):
+        m = re.search(r"_v(\d+)\.mp4$", p.name)
+        out.append((int(m.group(1)) if m else 0, p))
+    return [p for _, p in sorted(out)]
+
+
+def next_video_version(pid: int, name: str, week: int) -> int:
+    vs = video_versions(pid, name, week)
+    if not vs:
+        return 1
+    m = re.search(r"_v(\d+)\.mp4$", vs[-1].name)
+    return (int(m.group(1)) if m else 0) + 1
+
+
+def find_video(pid: int, name: str, week: int, filename: str) -> Optional[Path]:
+    """다운로드용 — 경로 탈출을 막는다(deck 쪽과 같은 규칙)."""
+    d = video_sub(pid, name, week, VIDEO_OUT, create=False)
+    p = (d / filename).resolve()
+    try:
+        p.relative_to(d.resolve())
+    except ValueError:
+        return None
+    return p if p.is_file() else None
 
 
 def _clean_plan(plan: list) -> list:
@@ -339,6 +418,8 @@ def week_status(pid: int, name: str, week: int) -> Dict[str, Any]:
         "photos": count_photos(pid, name, week) or _count_images(wd / "photos"),
         "deck": len(deck_versions(pid, name, week)) or _count_decks(wd / "out"),
         "images": count_my_images(pid, name, week) or _count_images(wd / "images"),
+        "script": (sd("video") / F_SCRIPT).is_file(),
+        "video": len(video_versions(pid, name, week)),
     }
 
 

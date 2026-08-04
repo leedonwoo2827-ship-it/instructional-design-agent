@@ -24,11 +24,13 @@ const routes = [
   { re: /^\/syllabus$/,  nav: "syl", layer: "base", load: () => import("./syllabus.js") },
   { re: /^\/textbook$/,  nav: "doc", layer: "base", load: () => import("./week-doc.js") },
   { re: /^\/slides$/,    nav: "ppt", layer: "base", load: () => import("./week-ppt.js") },
+  { re: /^\/video$/,     nav: "vid", layer: "base", load: () => import("./week-video.js") },
 
   // 부유 패널(위층) — 고르는 곳
   { re: /^\/courses$/,        nav: "",    layer: "panel", load: () => import("./pick.js") },
   { re: /^\/textbook\/pick$/, nav: "doc", layer: "panel", load: () => import("./pick.js") },
   { re: /^\/slides\/pick$/,   nav: "ppt", layer: "panel", load: () => import("./pick.js") },
+  { re: /^\/video\/pick$/,    nav: "vid", layer: "panel", load: () => import("./pick.js") },
   { re: /^\/workspace$/,      nav: "",    layer: "panel", load: () => import("./workspace.js") },
 ];
 
@@ -193,7 +195,7 @@ export async function renderChip() {
 export async function renderNavGuards() {
   const p = await getProject();
   const on = !!(p && p.syllabus_md);
-  ["doc", "ppt"].forEach((k) => {
+  ["doc", "ppt", "vid"].forEach((k) => {
     const a = $(`#side-nav a[data-nav="${k}"]`);
     if (!a) return;
     a.setAttribute("aria-disabled", on ? "false" : "true");
@@ -274,7 +276,7 @@ function weekRow(w, p) {
     state.week = w.week;
     refreshRail();
     // 주차 단계 화면에 있으면 그 자리에서 바꾸고, 아니면 슬라이드로 보낸다.
-    const stay = basePath === "/slides" || basePath === "/textbook";
+    const stay = basePath === "/slides" || basePath === "/textbook" || basePath === "/video";
     if (!stay) navigate("/slides");
     window.dispatchEvent(new CustomEvent("ida:week-changed"));
   });
@@ -333,7 +335,8 @@ $$("#side-nav a").forEach((a) => {
     if (!state.courseId) { e.preventDefault(); navigate("/courses"); return; }
     // 주차 단계는 "고르는 곳"을 먼저 띄운다 — 목록은 패널, 작업은 바탕.
     e.preventDefault();
-    navigate(nav === "doc" ? "/textbook/pick" : "/slides/pick");
+    navigate(nav === "doc" ? "/textbook/pick"
+             : nav === "vid" ? "/video/pick" : "/slides/pick");
   });
 });
 

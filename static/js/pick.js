@@ -20,6 +20,10 @@ import { weekCell, legend } from "./home.js";
 const TARGET = {
   "/courses": { base: "/syllabus", title: "강좌", sub: "강좌를 고르면 바탕이 그 강좌로 바뀝니다." },
   "/textbook/pick": { base: "/textbook", title: "교재 — 주차 고르기", sub: "칸을 고르면 패널이 닫히고 바탕이 그 주차로 바뀝니다." },
+  "/video/pick": {
+    base: "/video", title: "영상 — 주차 고르기",
+    sub: "대본을 쓰고 영상을 렌더할 주차를 고릅니다.",
+  },
   "/slides/pick": { base: "/slides", title: "슬라이드 — 주차 고르기", sub: "칸을 고르면 패널이 닫히고 바탕이 그 주차로 바뀝니다." },
 };
 

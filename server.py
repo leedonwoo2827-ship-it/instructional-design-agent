@@ -22,6 +22,7 @@ import re
 import threading
 import traceback
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
 from urllib.parse import quote
@@ -32,7 +33,8 @@ load_dotenv(encoding="utf-8-sig")
 
 from fastapi import Body, FastAPI, HTTPException, Query  # noqa: E402
 from fastapi.responses import (  # noqa: E402
-    FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse,
+    FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response,
+    StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
@@ -44,6 +46,7 @@ from core import llm as llm_mod  # noqa: E402
 from core import pptx_font  # noqa: E402
 from core import prompts  # noqa: E402
 from core import user_settings as settings_mod  # noqa: E402
+from core import video as video_mod  # noqa: E402
 from core import workspace as ws  # noqa: E402
 from core.pptx_export import outline_to_pptx  # noqa: E402
 from core.viz import bloom_counts  # noqa: E402
@@ -59,6 +62,8 @@ PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presen
 GEN_MAX_TOKENS = 16000
 SLIDE_LIST_TOKENS = 3000
 SLIDE_EXPAND_TOKENS = 24000
+# (구) 1시간당 슬라이드 수. 실제 장수는 core/video.py 의 목표 시간 역산을 쓴다 —
+# 영상 길이가 곧 학습 시간이고, 한 장에 머무는 시간(1.25분)이 장수를 정한다.
 SLIDES_PER_HOUR = 20
 
 WEEK_CHOICES = [8, 10, 13, 15, 16]
@@ -206,7 +211,9 @@ def api_settings_get():
     fs = pptx_font.font_set(ASSETS_DIR)
     return {
         "settings": {**s, "api_key": s["api_key"], "unsplash_key": s["unsplash_key"]},
-        "models": settings_mod.MODELS,
+        "models": settings_mod.models_for(s["provider"]),
+        "providers": settings_mod.PROVIDERS,
+        "cli_available": llm_mod.cli_available(),
         "week_choices": WEEK_CHOICES,
         "mode_choices": MODE_CHOICES,
         "slides_per_hour": SLIDES_PER_HOUR,
@@ -220,7 +227,8 @@ def api_settings_get():
 @app.put("/api/settings")
 def api_settings_put(body: Dict[str, Any] = Body(...)):
     s = settings()
-    for k in ("base_url", "api_key", "model", "unsplash_key"):
+    before = s.provider
+    for k in ("provider", "base_url", "api_key", "model", "unsplash_key"):
         if k in body:
             setattr(s, k, str(body[k] or ""))
     for k in ("max_tokens",):
@@ -229,8 +237,13 @@ def api_settings_put(body: Dict[str, Any] = Body(...)):
                 setattr(s, k, int(body[k]))
             except (TypeError, ValueError):
                 pass
-    if s.model not in settings_mod.MODELS:
-        s.model = settings_mod.DEFAULT_MODEL
+    if s.provider not in settings_mod.PROVIDERS:
+        s.provider = settings_mod.DEFAULT_PROVIDER
+    # 프로바이더를 바꿨는데 모델을 같이 안 보냈으면 그 프로바이더의 기본 모델로 맞춘다.
+    if s.provider != before and "model" not in body:
+        s.model = settings_mod.default_model_for(s.provider)
+    if s.model not in settings_mod.models_for(s.provider):
+        s.model = settings_mod.default_model_for(s.provider)
     settings_mod.save(s)
     return {"ok": True}
 
@@ -411,7 +424,45 @@ def api_week_get(pid: int, week: int):
         "week_dir": str(ws.week_dir(pid, p["name"], week, create=False)),
         "images_matched": len(scanned.matched) if scanned else 0,
         "n_slides": len(re.findall(r"(?m)^\s*#{2,3}\s*슬라이드", w["ppt_md"] or "")),
-        "target_slides": session_hours(p["form"] or {}) * SLIDES_PER_HOUR,
+        "target_slides": video_mod.target_slides(p["form"] or {}),
+        # ── 영상 ──
+        **_video_fields(pid, p, week, plan),
+    }
+
+
+def _video_fields(pid: int, p: Dict[str, Any], week: int, plan: List[Dict]) -> Dict[str, Any]:
+    """영상 단계가 화면에 필요한 값. 대본은 파일이 유일한 진실이라 매번 읽는다."""
+    name = p["name"]
+    form = p["form"] or {}
+    sc = ws.load_script(pid, name, week)
+    rows = sc.get("slides") or []
+    chars = sum(len(r.get("narration") or "") for r in rows)
+    vd = ws.video_dir(pid, name, week, create=False)
+    pr = video_mod.read_progress(vd)
+    return {
+        "video_minutes": video_mod.video_minutes(form),
+        "video_target_slides": video_mod.target_slides(form),
+        "has_script": bool(rows),
+        "script_slides": len(rows),
+        "script_chars": chars,
+        "script_est_min": round(video_mod.est_seconds("x" * chars) / 60, 1) if chars else 0,
+        "script_short": sum(1 for r in (sc.get("report") or [])
+                            if r.get("ratio") is not None and r["ratio"] < video_mod.MIN_RATIO),
+        "script_updated": sc.get("updated_at") or "",
+        "plan_slides_for_video": len(plan),
+        "videos": [{"name": f.name, "size": f.stat().st_size}
+                   for f in reversed(ws.video_versions(pid, name, week))],
+        "video_dir": str(vd),
+        # 인쇄 화면에 슬라이드를 곁들일 수 있는지. 0 이면 먼저 render 단계만 돌린다.
+        "slide_pngs": len(list(sd.glob("*.png"))) if (sd := ws.video_sub(
+            pid, name, week, ws.VIDEO_SLIDES, create=False)).is_dir() else 0,
+        "engine_ok": video_mod.engine_ready()[0],
+        "engine_why": video_mod.engine_ready()[1],
+        "render_running": video_mod.running(vd),
+        "render_died": video_mod.died(pr),
+        "render_progress": pr,
+        "render_summary": video_mod.summary(pr),
+        "render_ratio": video_mod.overall_ratio(pr),
     }
 
 
@@ -453,7 +504,8 @@ def syllabus_user_msg(f: Dict[str, Any]) -> str:
     )
 
 
-def script_user_msg(week: int, fmt: str, note: str, syllabus_md: str, hours: int) -> str:
+def script_user_msg(week: int, fmt: str, note: str, syllabus_md: str, hours: int,
+                    form: Optional[Dict[str, Any]] = None) -> str:
     kind = "학생용 교재(읽기 자료)" if fmt == "doc" else "PPT 슬라이드 개요"
     extra = f"\n[교수자 추가 요청] {note}\n" if (note or "").strip() else ""
     vol = ""
@@ -576,7 +628,7 @@ def api_gen_week(body: Dict[str, Any] = Body(...)):
             return
 
         # 슬라이드 개요는 2단계(제목 목록 → 상세)로 개수를 보장한다
-        n = session_hours(form) * SLIDES_PER_HOUR
+        n = video_mod.target_slides(form)
         emit("status", {"message": f"슬라이드 목록 구성 중… (목표 {n}장)"})
         list_user = (
             f"'{week}주차' 강의를 정확히 {n}장 슬라이드로 구성합니다. "
@@ -748,12 +800,24 @@ def api_slides_prompts(body: Dict[str, Any] = Body(...)):
     title = deck_stem(p["form"] or {}, week)
 
     def work(emit):
-        emit("status", {"message": f"슬라이드 {len(plan)}장의 씬 프롬프트 작성 중…"})
-        bundle = deck_builder.image_prompt_bundle(plan, title, generate_fn=_art_gen_fn())
+        # 자동 사진이 이미 붙은 슬롯은 그릴 필요가 없다 — 03_비주얼/assets 를 스캔해
+        # 있는 번호를 제외하고, "자리는 있는데 사진을 못 찾은 것" 만 프롬프트로 뽑는다.
+        pdir = ws.assets_dir(pid, p["name"], week, "visual", create=False)
+        have = set()
+        if pdir.is_dir():
+            for f in pdir.iterdir():
+                m = re.match(r"^(\d{1,3})", f.stem)
+                if f.is_file() and m:
+                    have.add(int(m.group(1)) - 1)      # 파일명은 1-based
+        emit("status", {"message": f"씬 프롬프트 작성 중… (자동 사진 {len(have)}장은 제외)"})
+        bundle = deck_builder.image_prompt_bundle(
+            plan, title, generate_fn=_art_gen_fn(), have_photos=have)
         ws.save_week(pid, p["name"], week,
                      img_prompt=json.dumps(bundle, ensure_ascii=False, indent=2))
-        placed = sum(1 for x in bundle["prompts"] if x["place"])
-        emit("done", {"ok": True, "count": bundle["count"], "placeable": placed})
+        msg = (f"그릴 이미지 {bundle['count']}장"
+               + (f" · 자동 사진 {bundle['photos_found']}장은 제외" if have else ""))
+        emit("done", {"ok": True, "count": bundle["count"],
+                      "placeable": bundle["count"], "message": msg})
 
     return stream_job(work)
 
@@ -788,11 +852,271 @@ def api_slides_merge(body: Dict[str, Any] = Body(...)):
             "images_dir": str(idir)}
 
 
+# ══ 영상 파이프라인 — 대본 → 렌더 ═══════════════════════════════════════════
+#   대본은 이 서버가 만든다(LLM 호출). 렌더(슬라이드 PNG·음성·자막·합성)는 엔진
+#   프로젝트의 별도 프로세스가 한다 — onnxruntime·PowerPoint COM 을 이 서버에
+#   끌어들이지 않고, 서버를 닫아도 렌더가 이어지게 하기 위해서다.
+
+NARRATION_TOKENS = 16000
+NARRATION_BATCH = 4          # 슬라이드당 ~1,100자면 4장이 출력 ~4,400자. 10장은 잘린다
+NARRATION_REFILL = 2         # 부족분 보강 재요청 횟수
+
+
+def _narration_json(raw: str) -> Dict[int, str]:
+    m = re.search(r"\{.*\}", raw or "", re.S)
+    if not m:
+        raise ValueError("응답에서 JSON 을 찾지 못했습니다.")
+    doc = json.loads(m.group(0))
+    return {int(x["index"]): str(x.get("narration") or "").strip()
+            for x in (doc.get("slides") or []) if x.get("index") is not None}
+
+
+def _ask_narration(system: str, user: str, label: str) -> Dict[int, str]:
+    """JSON 이 깨지면 한 번 더 조른다. 그래도 안 되면 빈 dict — 파이프라인은 멈추지 않는다."""
+    pv = provider(no_think=True)
+    for attempt in (1, 2):
+        try:
+            return _narration_json(pv.generate(
+                system, [{"role": "user", "content": user}],
+                max_tokens=NARRATION_TOKENS, temperature=0.4))
+        except Exception as e:  # noqa: BLE001
+            print(f"[{label}] 파싱 실패({attempt}/2): {e}", flush=True)
+            if attempt == 2:
+                return {}
+            user += "\n\n반드시 지정된 JSON 형식으로만 응답하라."
+    return {}
+
+
+@app.post("/api/video/script")
+def api_video_script(body: Dict[str, Any] = Body(...)):
+    """슬라이드플랜 → 나레이션 대본. 목표 분량을 채우고 부족분만 보강한다."""
+    pid, week = int(body["project_id"]), int(body["week"])
+    p = need_project(pid)
+    name, form = p["name"], (p["form"] or {})
+    minutes = float(body.get("minutes") or video_mod.video_minutes(form))
+    regen = bool(body.get("regen"))
+
+    def work(emit):
+        plan = _need_plan(pid, name, week)
+        prev = ws.load_script(pid, name, week)
+        keep = {} if regen else {int(r["index"]): (r.get("narration") or "")
+                                 for r in (prev.get("slides") or [])}
+        targets = video_mod.target_chars(plan, minutes)
+        course = (form.get("title") or "강의").strip()
+        head = (f"강의: {course} {week}주차\n"
+                f"목표 영상 길이: {minutes:.0f}분 · 슬라이드 {len(plan)}장\n")
+
+        out: Dict[int, str] = {i: t for i, t in keep.items() if t.strip()}
+        todo = [i for i in range(1, len(plan) + 1) if not (out.get(i) or "").strip()]
+        emit("status", {"message": f"대본 {len(todo)}장 생성 (목표 {minutes:.0f}분)"})
+
+        batches = [todo[i:i + NARRATION_BATCH] for i in range(0, len(todo), NARRATION_BATCH)]
+        tail = ""
+        for bi, group in enumerate(batches, start=1):
+            emit("status", {"message": f"대본 {bi}/{len(batches)} 배치",
+                            "progress": (bi - 1) / max(len(batches), 1)})
+            blocks = [f"{video_mod.slide_brief(i, plan[i-1])}\n목표 {targets[i]}자" for i in group]
+            user = (head + (f'직전 슬라이드의 마지막 문장: "{tail}"\n' if tail else "")
+                    + "\n각 슬라이드의 목표 글자수를 반드시 채워라.\n\n" + "\n\n".join(blocks))
+            got = _ask_narration(prompts.SYS_NARRATION, user, f"대본 {bi}")
+            for i in group:
+                out[i] = (got.get(i) or "").strip()
+            if (last := out.get(group[-1], "")):
+                tail = last.rstrip().split(". ")[-1][:80]
+
+        # 보강 — 목표의 85% 미만인 것만. 넘치는 것은 사람이 줄인다.
+        for rnd in range(1, NARRATION_REFILL + 1):
+            short = [i for i in range(1, len(plan) + 1)
+                     if len(out.get(i, "")) < targets[i] * video_mod.MIN_RATIO]
+            if not short:
+                break
+            emit("status", {"message": f"분량 보강 {rnd}회 · {len(short)}장"})
+            for k in range(0, len(short), NARRATION_BATCH):
+                group = short[k:k + NARRATION_BATCH]
+                blocks = []
+                for i in group:
+                    cur = out.get(i, "")
+                    blocks.append(
+                        f"{video_mod.slide_brief(i, plan[i-1])}\n"
+                        f"현재 {len(cur)}자 → 목표 {targets[i]}자 (약 {targets[i]-len(cur)}자 부족)\n"
+                        f"현재 대본:\n{cur}")
+                user = (head + "아래 대본들을 목표 분량까지 보강하라. 기존 내용을 유지하고 "
+                        "정의·이유·구분·예시를 덧붙여 늘린다. 같은 말 반복 금지.\n\n"
+                        + "\n\n".join(blocks))
+                got = _ask_narration(prompts.SYS_NARRATION, user, f"보강 {rnd}")
+                for i in group:
+                    new = (got.get(i) or "").strip()
+                    if len(new) > len(out.get(i, "")):   # 더 짧아지면 원본을 지킨다
+                        out[i] = new
+
+        report = video_mod.build_report(plan, out, targets)
+        doc = {"minutes": minutes, "report": report,
+               "updated_at": datetime.now().isoformat(timespec="seconds"),
+               "slides": [{"index": i, "type": s.get("type") or "bullets",
+                           "title": s.get("title") or "", "narration": out.get(i, "")}
+                          for i, s in enumerate(plan, start=1)]}
+        path = ws.save_script(pid, name, week, doc)
+        msg = video_mod.report_summary(report, minutes)
+        print(f"[대본] {msg}", flush=True)
+        emit("done", {"ok": True, "message": msg, "file": str(path),
+                      "slides": len(plan), "chars": sum(r["chars"] for r in report),
+                      "short": sum(1 for r in report
+                                   if r.get("ratio") is not None
+                                   and r["ratio"] < video_mod.MIN_RATIO)})
+
+    return stream_job(work)
+
+
+@app.put("/api/video/script/{pid}/{week}")
+def api_video_script_put(pid: int, week: int, body: Dict[str, Any] = Body(...)):
+    """씬 하나(또는 여러 개) 대본 수정. Claude Code 창에서 고친 것도 같은 파일이다."""
+    p = need_project(pid)
+    doc = ws.load_script(pid, p["name"], week)
+    if not doc.get("slides"):
+        raise HTTPException(400, "대본이 없습니다. 먼저 대본을 생성하세요.")
+    edits = {int(k): str(v or "") for k, v in (body.get("slides") or {}).items()}
+    changed = 0
+    for row in doc["slides"]:
+        i = int(row["index"])
+        if i in edits and edits[i] != (row.get("narration") or ""):
+            row["narration"] = edits[i]
+            changed += 1
+    if changed:
+        for r in (doc.get("report") or []):
+            i = int(r["index"])
+            if i in edits:
+                r["chars"] = len(edits[i])
+                r["ratio"] = round(r["chars"] / r["target"], 2) if r.get("target") else None
+                r["est_seconds"] = round(video_mod.est_seconds(edits[i]), 1)
+        doc["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        ws.save_script(pid, p["name"], week, doc)
+    return {"ok": True, "changed": changed}
+
+
+@app.get("/api/video/script/{pid}/{week}")
+def api_video_script_get(pid: int, week: int):
+    p = need_project(pid)
+    doc = ws.load_script(pid, p["name"], week)
+    return {"ok": True, "script": doc,
+            "path": str(ws.script_path(pid, p["name"], week))}
+
+
+@app.get("/api/video/script/{pid}/{week}/print")
+def api_video_script_print(pid: int, week: int, slides: int = Query(1)):
+    """대본 인쇄용 HTML. 영상과 분리 — 대본만 있으면 바로 뽑을 수 있다.
+
+    슬라이드는 50mm 로 작게 왼쪽에 넣는다(흐름 확인용). 이미지는 **data URI 로 굽는다** —
+    바깥 워크스페이스의 파일이라 /static 으로 못 주고, 인쇄 시점에 요청이 늦어
+    빈 칸으로 인쇄되는 사고를 막으려면 문서 안에 들어 있어야 한다.
+    """
+    p = need_project(pid)
+    name = p["name"]
+    doc = ws.load_script(pid, name, week)
+    if not (doc.get("slides")):
+        raise HTTPException(400, "나레이션 대본이 없습니다. 먼저 대본을 생성하세요.")
+
+    imgs: Dict[int, str] = {}
+    if slides:
+        sdir = ws.video_sub(pid, name, week, ws.VIDEO_SLIDES, create=False)
+        if sdir.is_dir():
+            imgs = _slide_data_uris(sdir, [int(r["index"]) for r in doc["slides"]])
+
+    # 번들이 있으면 wav 실제 길이로 시간대를 적는다 — 없으면 글자수 추정(문서에 표시됨)
+    bdir = ws.video_sub(pid, name, week, ws.VIDEO_BUNDLE, create=False)
+    bundle = next(iter(sorted(bdir.glob("ch*"))), None) if bdir.is_dir() else None
+
+    return HTMLResponse(video_mod.script_print_html(
+        course=(p["form"] or {}).get("title") or "강의", week=week, doc=doc,
+        minutes=video_mod.video_minutes(p["form"] or {}),
+        slide_img=imgs, bundle=bundle))
+
+
+def _slide_data_uris(sdir: Path, want: List[int], px: int = 640) -> Dict[int, str]:
+    """슬라이드 PNG → 축소 JPEG data URI. 82장 원본을 그대로 굽으면 문서가 16MB 가 된다."""
+    import base64
+    import io as _io
+    try:
+        from PIL import Image
+    except ImportError:
+        return {}
+    files = {}
+    for f in sdir.glob("*.png"):
+        m = re.match(r"^(\d{1,4})", f.stem)
+        if m:
+            files[int(m.group(1))] = f
+    out: Dict[int, str] = {}
+    for n in want:
+        f = files.get(n)
+        if not f:
+            continue
+        try:
+            im = Image.open(f).convert("RGB")
+            if im.width > px:
+                im = im.resize((px, round(im.height * px / im.width)), Image.LANCZOS)
+            buf = _io.BytesIO()
+            im.save(buf, "JPEG", quality=72, optimize=True)
+            out[n] = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+        except Exception:      # noqa: BLE001 — 한 장 실패로 인쇄를 막지 않는다
+            continue
+    return out
+
+
+@app.post("/api/video/render")
+def api_video_render(body: Dict[str, Any] = Body(...)):
+    """엔진에 렌더를 맡긴다. 즉시 반환하고 진행률은 주차 조회로 폴링한다."""
+    pid, week = int(body["project_id"]), int(body["week"])
+    p = need_project(pid)
+    name = p["name"]
+    vd = ws.video_dir(pid, name, week, create=True)
+    if video_mod.running(vd):
+        raise HTTPException(409, "이미 렌더가 진행 중입니다.")
+
+    deck = None
+    for st in ws.DECK_STEPS:
+        vs = ws.deck_versions(pid, name, week, st)
+        if vs:
+            deck = vs[-1]
+            break
+    if deck is None:
+        raise HTTPException(400, "완성된 덱(.pptx)이 없습니다. 슬라이드 단계를 먼저 끝내세요.")
+    if not ws.script_path(pid, name, week).is_file():
+        raise HTTPException(400, "나레이션 대본이 없습니다. 먼저 대본을 생성하세요.")
+
+    stages = body.get("stages") or ["render", "bundle", "tts", "compose", "viewer"]
+    try:
+        r = video_mod.start(
+            vd, chapter=max(1, min(999, int(week))),
+            deck=str(deck), script=str(ws.script_path(pid, name, week)),
+            slides_dir=str(ws.video_sub(pid, name, week, ws.VIDEO_SLIDES)),
+            bundle_root=str(ws.video_sub(pid, name, week, ws.VIDEO_BUNDLE)),
+            out_dir=str(ws.video_sub(pid, name, week, ws.VIDEO_OUT)),
+            out_name=f"영상_v{ws.next_video_version(pid, name, week)}.mp4",
+            voice=body.get("voice") or "F2", speed=float(body.get("speed") or 1.02),
+            limit=int(body.get("limit") or 0) or None,
+            kenburns=body.get("kenburns") or "off",
+            burn_subs=bool(body.get("burn_subs", False)),
+            soft_subs=bool(body.get("soft_subs", True)),
+            stages=stages, force=body.get("force") or [],
+            title=f"{week}주차 · {(p['form'] or {}).get('title') or '강의'}")
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, **r}
+
+
+@app.post("/api/video/cancel")
+def api_video_cancel(body: Dict[str, Any] = Body(...)):
+    pid, week = int(body["project_id"]), int(body["week"])
+    p = need_project(pid)
+    vd = ws.video_dir(pid, p["name"], week, create=False)
+    return {"ok": video_mod.cancel(vd)}
+
+
 @app.post("/api/open-folder")
 def api_open_folder(body: Dict[str, Any] = Body(...)):
     """탐색기로 폴더 열기(로컬 앱 전용). 실패해도 경로는 돌려준다.
 
-    what: images(기본, 05_합치기/assets) | photos(03_비주얼/assets) | week(주차 루트)
+    what: images(기본, 05_합치기/assets) | photos(03_비주얼/assets) |
+          week(주차 루트) | video(06_영상)
     """
     pid, week = int(body["project_id"]), int(body["week"])
     what = body.get("what") or "images"
@@ -801,6 +1125,8 @@ def api_open_folder(body: Dict[str, Any] = Body(...)):
         d = ws.week_dir(pid, p["name"], week)
     elif what == "photos":
         d = ws.assets_dir(pid, p["name"], week, "visual")
+    elif what == "video":
+        d = ws.video_dir(pid, p["name"], week)
     else:
         d = ws.assets_dir(pid, p["name"], week, "merge")
     try:
@@ -873,6 +1199,15 @@ def dl_deck(pid: int, week: int, name: str):
     if not f:
         raise HTTPException(404)
     return FileResponse(str(f), media_type=PPTX_MIME, filename=name)
+
+
+@app.get("/api/dl/video/{pid}/{week}/{name}")
+def dl_video(pid: int, week: int, name: str):
+    p = need_project(pid)
+    f = ws.find_video(pid, p["name"], week, name)
+    if not f:
+        raise HTTPException(404)
+    return FileResponse(str(f), media_type="video/mp4", filename=name)
 
 
 @app.get("/api/dl/credits/{pid}/{week}")
