@@ -92,8 +92,35 @@ export async function mount(root, ctx) {
     ? "폰트가 없는 PC 에서도 레이아웃이 그대로 열립니다(파일 약 3MB 증가)."
     : "assets/fonts 에 Pretendard 가 없어 시스템 폰트로 만듭니다.";
   embedLb.append(embed, el("span", null, "폰트 임베드"));
-  bar.node.append(note, embedLb);
+
+  // 배색 — 주차별로 기억한다. 2주차를 옛 배색으로 두고 3주차만 새 배색으로 갈 수 있다.
+  // ★ 회사 PPTX 양식(template)과 다른 것이다. 이건 색·글꼴만 바꾼다.
+  const pal = el("select");
+  pal.title = "슬라이드 배색. 이 주차에만 적용되고, 빌드할 때 함께 저장됩니다.";
+  const palLb = el("label", "check");
+  palLb.append(el("span", null, "배색"), pal);
+  bar.node.append(note, embedLb, palLb);
   page.append(bar.node, status.node);
+
+  /** 배색 목록 채우기. 이미 빌드한 주차는 그때 쓴 값이 그대로 선택돼야 한다. */
+  function fillPalettes(w) {
+    const list = w?.palettes || [];
+    const want = w?.palette || "";
+    if (pal.dataset.filled !== String(list.length)) {
+      pal.innerHTML = "";
+      list.forEach((t) => {
+        const o = el("option", null, t.label);
+        o.value = t.name;
+        pal.appendChild(o);
+      });
+      pal.dataset.filled = String(list.length);
+    }
+    pal.value = want;
+    // 고정된 주차는 배지로 알려 준다 — 왜 이 색인지 화면에서 보여야 한다.
+    palLb.title = w?.palette_pinned
+      ? `이 주차는 '${want}' 로 고정돼 있습니다(빌드할 때 저장됨).`
+      : `기본값 '${want}' 을 씁니다. 바꿔서 빌드하면 이 주차에 고정됩니다.`;
+  }
 
   // ── 단계 카드 ──
   const stepWrap = el("div", "steps");
@@ -185,7 +212,7 @@ export async function mount(root, ctx) {
     try {
       const d = await api("/api/slides/merge",
         { method: "POST", body: { project_id: p.id, week: state.week,
-                                  embed_font: embed.checked } });
+                                  embed_font: embed.checked, palette: pal.value } });
       if (!d.ok) {
         toast("합칠 이미지를 찾지 못했습니다.", "err");
         showMergeReport(d);
@@ -239,6 +266,7 @@ export async function mount(root, ctx) {
 
     doc.render(cur?.ppt_md || "");
     controls.node.hidden = !hasOutline;
+    fillPalettes(cur);
 
     // 1 개요
     markState("outline", hasOutline ? "done" : "ready",
@@ -263,7 +291,7 @@ export async function mount(root, ctx) {
     nodes.draft.act.innerHTML = "";
     nodes.draft.act.appendChild(btn(hasPlan ? "다시 설계" : "초안 만들기", {
       primary: hasOutline && !hasPlan, iconName: "layers", lock: !hasOutline,
-      onClick: () => runStep("/api/slides/draft", {}, "초안",
+      onClick: () => runStep("/api/slides/draft", { palette: pal.value }, "초안",
         (d) => `초안 ${d.slides}장 · 사진 자리 ${d.photo_slots}곳 · ${d.file}`),
     }));
     nodes.draft.extra.hidden = !hasPlan;
@@ -299,7 +327,7 @@ export async function mount(root, ctx) {
       nodes.visual.act.appendChild(btn(nPhoto ? "다시 빌드" : "사진 수집·배치", {
         primary: hasPlan && !nPhoto, iconName: "image", lock: !hasPlan,
         title: "보관된 사진을 재사용합니다.",
-        onClick: () => runStep("/api/slides/visual", {}, "사진원고 서칭/추가",
+        onClick: () => runStep("/api/slides/visual", { palette: pal.value }, "사진원고 서칭/추가",
           (d) => `사진 ${d.photos}/${d.slots}장 배치 (재사용 ${d.reused}) · ${d.file}`),
       }));
       if (nPhoto) {
@@ -308,7 +336,7 @@ export async function mount(root, ctx) {
           title: "보관된 사진을 버리고 다시 검색합니다.",
           onClick: () => {
             if (!confirm("보관된 사진을 버리고 다시 검색합니다. 계속할까요?")) return;
-            runStep("/api/slides/visual", { refetch: true }, "사진원고 서칭/추가",
+            runStep("/api/slides/visual", { refetch: true, palette: pal.value }, "사진원고 서칭/추가",
               (d) => `사진 ${d.photos}/${d.slots}장 새로 받음 · ${d.file}`);
           },
         }));

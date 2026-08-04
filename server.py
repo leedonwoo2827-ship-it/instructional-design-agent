@@ -39,6 +39,7 @@ from fastapi.responses import (  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from core import db  # noqa: E402
+from core import palette  # noqa: E402
 from core import deck_builder  # noqa: E402
 from core import image_merge  # noqa: E402
 from core import image_search  # noqa: E402
@@ -412,6 +413,11 @@ def api_week_get(pid: int, week: int):
         "plan_levels": deck_builder.level_counts(plan) if plan else {},
         "photo_slots": len(deck_builder.image_queries(plan)) if plan else 0,
         "photos": ws.count_photos(pid, p["name"], week),
+        # 배색 — 이 주차가 쓸 값(해석 결과)과 고를 수 있는 목록.
+        # ★ 'template' 이 아니라 'palette' 다. template 은 회사 PPTX 양식을 뜻한다.
+        "palette": resolve_palette(pid, p, week),
+        "palette_pinned": bool((ws.week_cfg(pid, p["name"], week).get("palette") or "").strip()),
+        "palettes": palette.available(),
         # 덱은 단계별 폴더에 흩어져 있다 — 어느 단계 산출물인지 함께 돌려준다.
         "decks": [
             {"name": f.name, "size": f.stat().st_size,
@@ -684,16 +690,39 @@ def _art_gen_fn():
     return gen_fn
 
 
+def resolve_palette(pid: int, p: Dict[str, Any], week: int,
+                    body: Optional[Dict[str, Any]] = None) -> str:
+    """이 주차에 쓸 **배색** 이름. (회사 PPTX 양식과는 다른 것이다)
+
+    주차별 값 > 전역 기본값(user_settings.palette) > palette.DEFAULT.
+    ★ 주차별이 이기는 이유: 3주차를 새 배색으로 바꿨다고 2주차 재빌드까지
+      새 배색으로 나오면 안 된다.
+    body 에 palette 가 오면 그 값을 주차 설정에 저장한다(고른 즉시 기억).
+    """
+    name = p["name"]
+    if body and body.get("palette") is not None:
+        want = str(body["palette"] or "").strip()
+        if want and want not in palette.names():
+            raise HTTPException(400, f"없는 배색입니다: {want}")
+        ws.save_week_cfg(pid, name, week, palette=want)
+    picked = (ws.week_cfg(pid, name, week).get("palette") or "").strip()
+    if not picked:
+        picked = (settings().palette or "").strip()
+    return picked if picked in palette.names() else palette.DEFAULT
+
+
 def _build_and_save(pid: int, p: Dict[str, Any], week: int, step: str,
                     plan: List[Dict], images: Dict[int, bytes], *,
-                    embed_font: bool, credits: str = "") -> str:
+                    embed_font: bool, credits: str = "",
+                    pal: Optional[str] = None) -> str:
     """빌드해서 **그 단계 폴더**에 다음 버전으로 저장. 단계마다 버전 계열이 따로다."""
     form = p["form"] or {}
     course = (form.get("title") or "강의").strip()
     title = deck_stem(form, week)
     data = deck_builder.build_deck(
         plan, template_path=template_arg(), images=images, deck_title=title,
-        logo_path=logo_arg(), footer=f"{course} · {week}주차", embed_font=embed_font)
+        logo_path=logo_arg(), footer=f"{course} · {week}주차", embed_font=embed_font,
+        template=pal or resolve_palette(pid, p, week))
     if not data:
         raise RuntimeError("슬라이드 빌드 실패(python-pptx 확인).")
     return ws.save_deck(pid, p["name"], week, step, data,
@@ -715,6 +744,9 @@ def api_slides_draft(body: Dict[str, Any] = Body(...)):
     p = need_project(pid)
     form = p["form"] or {}
     course = (form.get("title") or "강의").strip()
+    # ★ 배색은 라우트 진입에서 해석한다. work() 안에서 부르면 '없는 배색' 이
+    #   400 이 아니라 SSE error 로 삼켜져 조용한 실패가 된다.
+    pal = resolve_palette(pid, p, week, body)
 
     def work(emit):
         outline = ws.load_week(pid, p["name"], week)["ppt_md"]
@@ -728,7 +760,7 @@ def api_slides_draft(body: Dict[str, Any] = Body(...)):
         ws.save_week(pid, p["name"], week, plan=plan)
 
         emit("status", {"message": "초안 빌드 중… (사진 없이 레이아웃만)"})
-        fname = _build_and_save(pid, p, week, "draft", plan, {}, embed_font=embed_font)
+        fname = _build_and_save(pid, p, week, "draft", plan, {}, embed_font=embed_font, pal=pal)
         types: Dict[str, int] = {}
         for s in plan:
             t = s.get("type", "bullets")
@@ -748,6 +780,7 @@ def api_slides_visual(body: Dict[str, Any] = Body(...)):
     p = need_project(pid)
     plan = _need_plan(pid, p["name"], week)
     title = deck_stem(p["form"] or {}, week)
+    pal = resolve_palette(pid, p, week, body)
 
     def work(emit):
         queries = deck_builder.image_queries(plan)
@@ -785,7 +818,7 @@ def api_slides_visual(body: Dict[str, Any] = Body(...)):
 
         emit("status", {"message": "재빌드 중… (사진 배치 + 레이아웃 정돈)"})
         fname = _build_and_save(pid, p, week, "visual", plan, images,
-                                embed_font=embed_font, credits=credits)
+                                embed_font=embed_font, pal=pal, credits=credits)
         emit("done", {"ok": True, "photos": len(images), "slots": len(queries),
                       "reused": kept, "file": fname})
 
@@ -839,6 +872,7 @@ def api_slides_merge(body: Dict[str, Any] = Body(...)):
     embed_font = bool(body.get("embed_font", True))
     p = need_project(pid)
     plan = _need_plan(pid, p["name"], week)
+    pal = resolve_palette(pid, p, week, body)
 
     idir = ws.assets_dir(pid, p["name"], week, "merge")
     mine = image_merge.scan(idir, n_slides=len(plan))
@@ -853,7 +887,7 @@ def api_slides_merge(body: Dict[str, Any] = Body(...)):
     combined = {**auto.images, **mine.images}
     plan2, used, skipped = deck_builder.apply_images(plan, combined)
     try:
-        fname = _build_and_save(pid, p, week, "merge", plan2, used, embed_font=embed_font)
+        fname = _build_and_save(pid, p, week, "merge", plan2, used, embed_font=embed_font, pal=pal)
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     return {"ok": True, "placed": len(used), "mine": len(mine.images),

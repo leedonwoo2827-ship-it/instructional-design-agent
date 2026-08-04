@@ -68,6 +68,11 @@ class Settings:
     temperature: float = 0.7
     # 디자인 슬라이드 사진용(선택). 있으면 Unsplash, 없으면 Openverse.
     unsplash_key: str = ""
+    # 슬라이드 **배색 템플릿**의 기본값. 주차별로 고른 값이 있으면 그게 이긴다
+    # (이미 만든 주차를 재빌드했을 때 색이 바뀌면 안 된다).
+    # ★ 이름을 palette 로 둔다 — 'template' 은 회사 PPTX 양식(assets/company_template.pptx)
+    #   을 뜻하는 말로 이미 쓰이고 있어서 겹치면 서로를 덮어쓴다.
+    palette: str = ""       # 빈 값 = palette.DEFAULT
 
     @property
     def needs_key(self) -> bool:
@@ -82,6 +87,7 @@ def _env_defaults() -> Settings:
     s.api_key = os.environ.get("UBION_LITELLM_KEY", s.api_key)
     s.model = os.environ.get("IDA_MODEL", os.environ.get("UBION_LITELLM_MODEL", s.model))
     s.unsplash_key = os.environ.get("UNSPLASH_ACCESS_KEY", s.unsplash_key)
+    s.palette = os.environ.get("IDA_PALETTE", s.palette)
     return s
 
 
@@ -104,6 +110,11 @@ def load() -> Settings:
     # 이전 프로바이더의 모델 id 가 남아 있을 수 있어 그때 기본값으로 되돌린다.
     if merged.get("model") not in models_for(merged["provider"]):
         merged["model"] = default_model_for(merged["provider"])
+    # 없는 배색 이름이 남아 있으면 기본으로 되돌린다(templates/ 에서 json 을 지웠을 때).
+    if merged.get("palette"):
+        from core import palette as _pal
+        if merged["palette"] not in _pal.names():
+            merged["palette"] = ""
     return Settings(**merged)
 
 

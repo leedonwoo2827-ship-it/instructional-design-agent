@@ -66,6 +66,11 @@ F_MSGS = "대화.json"
 F_CREDITS = "이미지출처.txt"
 # 영상 — 나레이션 대본이 유일한 진실이다. 앱과 Claude Code 창이 같은 파일을 고친다.
 F_SCRIPT = "나레이션.json"
+# 주차별 빌드 설정 — 지금은 배색 템플릿 하나뿐. 주차 폴더 루트에 둔다.
+# ★ 주차별로 두는 이유: 이미 만든 주차를 재빌드했을 때 색이 바뀌면 안 된다.
+#   전역 기본값(user_settings.template)만 두면 3주차를 새 배색으로 바꾸는 순간
+#   2주차 재빌드도 새 배색으로 나온다.
+F_WEEKCFG = "빌드설정.json"
 F_JOB = "job.json"
 F_PROGRESS = "progress.json"
 VIDEO_SLIDES = "슬라이드"      # 06_영상/슬라이드/001.png  (PowerPoint 로 뽑은 PNG)
@@ -278,6 +283,19 @@ def _clean_plan(plan: list) -> list:
         else:
             out.append(s)
     return out
+
+
+def week_cfg(pid: int, name: str, week: int) -> Dict[str, Any]:
+    """주차별 빌드 설정. 없으면 빈 dict — 호출한 쪽이 기본값을 쓴다."""
+    return _read_json(week_dir(pid, name, week, create=False) / F_WEEKCFG, {}) or {}
+
+
+def save_week_cfg(pid: int, name: str, week: int, **kw) -> Dict[str, Any]:
+    """주어진 키만 덮어쓴다. None 은 '건드리지 않음'."""
+    cfg = week_cfg(pid, name, week)
+    cfg.update({k: v for k, v in kw.items() if v is not None})
+    _write_json(week_dir(pid, name, week) / F_WEEKCFG, cfg)
+    return cfg
 
 
 def load_week(pid: int, name: str, week: int) -> Dict[str, Any]:
