@@ -219,7 +219,8 @@ export async function mount(root, ctx) {
         return;
       }
       showMergeReport(d);
-      await after(`${d.placed}장 배치 (내 이미지 ${d.mine} · 자동 사진 ${d.auto})`);
+      const gap = d.empty?.length ? ` · 빈 자리 ${d.empty.length}곳` : "";
+      await after(`${d.placed}장 배치 (내 이미지 ${d.mine} · 자동 사진 ${d.auto})${gap}`);
     } catch (e) { toast(e.message, "err"); }
     finally { status.hide(); setBusy(false); }
   }
@@ -230,6 +231,12 @@ export async function mount(root, ctx) {
     if (d.skipped?.length) {
       lines.push("자리 없어 건너뜀(도형 레이아웃): " +
         d.skipped.slice(0, 10).map((n) => n + "번").join(", "));
+    }
+    // 빈 액자로 인쇄될 자리 — 82장을 넘겨보기 전에 여기서 알아야 한다.
+    if (d.empty?.length) {
+      lines.push(`★ 이미지가 없어 빈 자리로 남음 ${d.empty.length}곳: ` +
+        d.empty.slice(0, 12).map((n) => n + "번").join(", ") +
+        (d.empty.length > 12 ? " …" : ""));
     }
     ex.textContent = lines.join("  ·  ");
     ex.hidden = false;
@@ -360,7 +367,27 @@ export async function mount(root, ctx) {
       nodes.prompts.act.appendChild(
         dlBtn("JSON 내려받기", `/api/dl/week/${p.id}/${state.week}/imgprompt.json`, "download"));
     }
-    nodes.prompts.extra.hidden = !hasPrompt;
+    // 빠진 자리만 뽑기 — 전체를 다시 돌리면 이미 그린 것을 또 그리게 된다.
+    const nEmpty = (cur?.empty_slots || []).length;
+    if (hasPlan && nEmpty) {
+      nodes.prompts.act.appendChild(btn(`부족분만 뽑기 (${nEmpty})`, {
+        iconName: "clipboard",
+        title: `사진 자리는 있는데 이미지가 없는 ${nEmpty}곳만 별도 JSON 으로 뽑습니다.`
+             + " 이미지프롬프트_부족분.json — 원본은 그대로 둡니다.",
+        onClick: () => runStep("/api/slides/prompts/gap", {}, "부족분 프롬프트",
+          (d) => `부족분 ${d.count}장 · ${d.file}`),
+      }));
+    }
+    if (cur?.has_gap_prompt) {
+      nodes.prompts.act.appendChild(dlBtn("부족분 JSON",
+        `/api/dl/week/${p.id}/${state.week}/imgprompt-gap.json`, "download"));
+    }
+    nodes.prompts.extra.hidden = !hasPrompt && !nEmpty;
+    if (!hasPrompt && nEmpty) {
+      nodes.prompts.extra.textContent =
+        `★ 이미지 없는 사진 자리 ${nEmpty}곳: `
+        + (cur.empty_slots || []).slice(0, 12).map((x) => x + "번").join(", ");
+    }
     if (hasPrompt) {
       let n = 0, placed = 0;
       try {
@@ -368,9 +395,11 @@ export async function mount(root, ctx) {
         n = b.count || 0;
         placed = (b.prompts || []).filter((x) => x.place).length;
       } catch { /* 손으로 고쳐 깨졌을 수 있다 — 숫자 없이 넘어간다 */ }
-      nodes.prompts.extra.textContent = n
+      const gap = nEmpty ? `  ★ 이미지 없는 사진 자리 ${nEmpty}곳: `
+        + (cur.empty_slots || []).slice(0, 12).map((x) => x + "번").join(", ") : "";
+      nodes.prompts.extra.textContent = (n
         ? `${n}개 · 이미지를 실제로 올릴 슬라이드 ${placed}개 (place=true)`
-        : "JSON 을 읽을 수 없습니다.";
+        : "JSON 을 읽을 수 없습니다.") + gap;
     }
 
     // 5 이미지 합치기 및 최종 PPTX

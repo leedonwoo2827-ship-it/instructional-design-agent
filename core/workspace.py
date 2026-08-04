@@ -62,6 +62,9 @@ F_DOC = "교재.md"
 F_OUTLINE = "슬라이드개요.md"
 F_PLAN = "슬라이드플랜.json"
 F_PROMPT = "이미지프롬프트.json"
+# 사진 자리는 있는데 이미지가 안 들어온 것만 따로. 전체를 다시 돌리지 않고
+# **빠진 것만** 그려 올 수 있게 별도 파일로 낸다.
+F_PROMPT_GAP = "이미지프롬프트_부족분.json"
 F_MSGS = "대화.json"
 F_CREDITS = "이미지출처.txt"
 # 영상 — 나레이션 대본이 유일한 진실이다. 앱과 Claude Code 창이 같은 파일을 고친다.
@@ -283,6 +286,27 @@ def _clean_plan(plan: list) -> list:
         else:
             out.append(s)
     return out
+
+
+def gap_prompt_path(pid: int, name: str, week: int, *, create: bool = False) -> Path:
+    return step_dir(pid, name, week, "prompts", create=create) / F_PROMPT_GAP
+
+
+def save_gap_prompt(pid: int, name: str, week: int, bundle: Dict[str, Any]) -> Path:
+    p = gap_prompt_path(pid, name, week, create=True)
+    _write_json(p, bundle)
+    return p
+
+
+def load_gap_prompt(pid: int, name: str, week: int) -> Dict[str, Any]:
+    return _read_json(gap_prompt_path(pid, name, week), {}) or {}
+
+
+def clear_gap_prompt(pid: int, name: str, week: int) -> None:
+    """빈 자리가 없어지면 지운다 — 남겨 두면 이미 그린 것을 또 그리게 된다."""
+    p = gap_prompt_path(pid, name, week)
+    if p.is_file():
+        p.unlink()
 
 
 def week_cfg(pid: int, name: str, week: int) -> Dict[str, Any]:

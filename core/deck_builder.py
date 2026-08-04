@@ -641,9 +641,10 @@ PHOTO_PRESETS = [
     {"img": (7.95, PHOTO_TOP, 4.78, _PH), "tx": 0.60, "tw": 7.00},  # 우측 넓게
     {"img": (0.60, PHOTO_TOP, 4.78, _PH), "tx": 5.72, "tw": 7.01},  # 좌측 넓게
     {"img": (8.20, PHOTO_TOP, 4.53, _PH), "tx": 0.60, "tw": 7.25},  # 우측 중간
-    {"img": (2.60, 4.40, 8.13, 2.22), "tx": 0.60, "tw": 12.13,
-     "below": True},                                                # 하단 와이드
 ]
+# '하단 와이드'(2.60, 4.40, 8.13x2.22) 는 뺐다. 비율이 3.7:1 이라 1:1 로 주문한
+# 그림을 넣으면 위아래가 잘리고, 본문이 위로 밀려 화면이 비어 보인다.
+# below 처리 코드는 남겨 둔다 — 나중에 와이드 자리를 다시 넣을 수 있다.
 
 
 # ── 타입별 렌더 ───────────────────────────────────────────────────────────
@@ -1597,10 +1598,29 @@ PLACEABLE_TYPES = ("photo", "bullets")
 
 
 def _prompt_place(s: Dict) -> bool:
-    """이 슬라이드에 이미지를 실제로 배치할 것인가(프롬프트 JSON 의 place 값)."""
-    if s.get("emphasis"):
-        return False
+    """이 슬라이드에 이미지를 실제로 배치할 것인가(프롬프트 JSON 의 place 값).
+
+    ★ 예전에는 emphasis 슬라이드를 빼고 있었다. 그런데 emphasis 는 **칩 색만**
+      바꾼다(연한 칩 → 진한 네이비 알약). 이미지 자리와 아무 상관이 없고,
+      render_photo 는 emphasis 여도 사진 자리를 그대로 예약한다.
+      그래서 '자리는 예약됐는데 프롬프트가 없는' 슬라이드가 생겼고,
+      받는 사람은 만들 수 없는 이미지를 기다리다 빈 액자로 인쇄했다.
+      (3주차 7번·76번이 그랬다)
+
+    지켜야 할 불변식: **자리를 예약하는 슬라이드에는 반드시 프롬프트가 있다.**
+    자리는 type=photo 일 때 예약되고, bullets 는 이미지가 오면 photo 로 승격되므로
+    둘 다 프롬프트 대상이다 = PLACEABLE_TYPES.
+    """
     return (s.get("type") or "bullets") in PLACEABLE_TYPES
+
+
+def photo_slot_slides(plan: List[Dict]) -> List[int]:
+    """사진 **자리가 예약되는** 슬라이드의 1-based 번호.
+
+    빈 액자로 남을 수 있는 자리를 세는 데 쓴다 — 조용히 비면 인쇄까지 간다.
+    """
+    return [i + 1 for i, s in enumerate(plan or [])
+            if (s.get("type") or "bullets") == "photo"]
 
 
 def apply_images(plan: List[Dict], images: Dict[int, bytes]):

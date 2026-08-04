@@ -413,6 +413,9 @@ def api_week_get(pid: int, week: int):
         "plan_levels": deck_builder.level_counts(plan) if plan else {},
         "photo_slots": len(deck_builder.image_queries(plan)) if plan else 0,
         "photos": ws.count_photos(pid, p["name"], week),
+        # 사진 자리는 있는데 이미지가 없는 슬라이드 — 빈 액자로 인쇄될 자리다.
+        "empty_slots": _empty_slots(pid, p["name"], week, plan) if plan else [],
+        "has_gap_prompt": ws.gap_prompt_path(pid, p["name"], week).is_file(),
         # 배색 — 이 주차가 쓸 값(해석 결과)과 고를 수 있는 목록.
         # ★ 'template' 이 아니라 'palette' 다. template 은 회사 PPTX 양식을 뜻한다.
         "palette": resolve_palette(pid, p, week),
@@ -865,6 +868,60 @@ def api_slides_prompts(body: Dict[str, Any] = Body(...)):
     return stream_job(work)
 
 
+def _empty_slots(pid: int, name: str, week: int, plan: List[Dict]) -> List[int]:
+    """사진 자리는 예약됐는데 이미지가 없는 슬라이드(1-based).
+
+    05_합치기/assets(내 이미지)와 03_비주얼/assets(자동 사진) 둘 다 본다 —
+    어느 쪽으로든 채워졌으면 빈 자리가 아니다.
+    """
+    have = set()
+    for step in ("merge", "visual"):
+        d = ws.assets_dir(pid, name, week, step, create=False)
+        if not d.is_dir():
+            continue
+        for f in d.iterdir():
+            m = re.match(r"^(\d{1,4})", f.stem)
+            if f.is_file() and m:
+                have.add(int(m.group(1)))
+    return [n for n in deck_builder.photo_slot_slides(plan) if n not in have]
+
+
+@app.post("/api/slides/prompts/gap")
+def api_slides_prompts_gap(body: Dict[str, Any] = Body(...)):
+    """빠진 자리만 프롬프트로 뽑아 **별도 JSON** 으로 낸다.
+
+    전체를 다시 돌리면 이미 그린 25장을 또 그리게 된다. 부족분만 따로 내야
+    그것만 돌릴 수 있다.
+    """
+    pid, week = int(body["project_id"]), int(body["week"])
+    p = need_project(pid)
+    name = p["name"]
+    plan = _need_plan(pid, name, week)
+    empty = _empty_slots(pid, name, week, plan)
+    if not empty:
+        ws.clear_gap_prompt(pid, name, week)
+        return {"ok": True, "count": 0, "empty": [],
+                "message": "빈 사진 자리가 없습니다. 부족분 파일도 지웠습니다."}
+
+    def work(emit):
+        emit("status", {"message": f"빠진 자리 {len(empty)}곳만 프롬프트 작성 중…"})
+        # 빠진 번호만 남기고 나머지는 have_photos 로 제외한다 — 같은 코드를 쓰되
+        # 대상만 좁힌다(프롬프트 문구가 본 파일과 달라지면 결과물이 안 어울린다).
+        want = {n - 1 for n in empty}
+        have = {i for i in range(len(plan)) if i not in want}
+        bundle = deck_builder.image_prompt_bundle(
+            plan, deck_stem(p["form"] or {}, week),
+            generate_fn=_art_gen_fn(), have_photos=have)
+        bundle["gap_of"] = ws.F_PROMPT
+        bundle["slides"] = empty
+        path = ws.save_gap_prompt(pid, name, week, bundle)
+        emit("done", {"ok": True, "count": bundle["count"], "empty": empty,
+                      "file": path.name,
+                      "message": f"부족분 {bundle['count']}장 · {path.name}"})
+
+    return stream_job(work)
+
+
 # ── 5 이미지 합치기 및 최종 PPTX — 내 이미지 + 자동 사진 → 최종본 ────────────────────────
 @app.post("/api/slides/merge")
 def api_slides_merge(body: Dict[str, Any] = Body(...)):
@@ -890,8 +947,11 @@ def api_slides_merge(body: Dict[str, Any] = Body(...)):
         fname = _build_and_save(pid, p, week, "merge", plan2, used, embed_font=embed_font, pal=pal)
     except RuntimeError as e:
         raise HTTPException(500, str(e))
+    # ★ 이미지가 안 온 사진 자리는 **빈 액자로 인쇄된다.** 조용히 넘어가면
+    #   82장을 다 넘겨보기 전에는 모른다(3주차 7번·76번이 그렇게 나갔다).
+    empty = [n for n in deck_builder.photo_slot_slides(plan2) if (n - 1) not in used]
     return {"ok": True, "placed": len(used), "mine": len(mine.images),
-            "auto": len(auto.images), "skipped": skipped,
+            "auto": len(auto.images), "skipped": skipped, "empty": empty,
             "report": image_merge.report(mine), "file": fname,
             "images_dir": str(idir)}
 
@@ -1233,6 +1293,13 @@ def dl_week(pid: int, week: int, what: str, ext: str):
     if ext == "json" and what == "imgprompt":
         return _dl((w["img_prompt"] or "").encode("utf-8"),
                    deck_stem(form, week) + "_이미지프롬프트.json", "application/json")
+    if ext == "json" and what == "imgprompt-gap":
+        g = ws.load_gap_prompt(pid, p["name"], week)
+        if not g:
+            raise HTTPException(404, "부족분 프롬프트가 없습니다.")
+        return _dl(json.dumps(g, ensure_ascii=False, indent=2).encode("utf-8"),
+                   deck_stem(form, week) + "_이미지프롬프트_부족분.json",
+                   "application/json")
     raise HTTPException(404)
 
 
