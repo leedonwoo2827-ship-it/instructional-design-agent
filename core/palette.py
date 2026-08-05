@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 TPL_DIR = Path(__file__).resolve().parent.parent / "templates"
-DEFAULT = "navy-amber"
+# 회사 로고가 청색이라 시안을 기본으로 둔다.
+# ★ templates/ 에서 이 이름의 json 을 지우면 전 주차가 조용히 다른 색으로 빌드된다.
+DEFAULT = "cyan"
 
 # _HEX 를 제자리에서 바꾸므로 빌드가 겹치면 색이 섞인다. 빌드는 순간이지만
 # 두 요청이 동시에 들어올 수 있어 락을 둔다.

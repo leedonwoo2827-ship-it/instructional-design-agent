@@ -1,0 +1,31 @@
+{
+  "name": "lavender",
+  "label": "라벤더 (7a5cc0)",
+  "note": "레이아웃견본_lavender.pptx 에서 뽑은 배색. 6종은 골격이 같고 색만 다르다 — 면적 서명(45.0/21.8/15.5/5.2 in²)으로 자리를 정하고, 밴드용 진한 색은 흰 글씨 4.5:1 을 넘도록 계산했다.",
+  "font": "Noto Sans KR",
+  "source": "_context/6/레이아웃견본_lavender.pptx",
+  "colors": {
+    "navy": "7A5CC0",
+    "navy_75": "9B85D0",
+    "navy_55": "CDBEEE",
+    "chip": "EFE9FA",
+    "amber": "8A6FC9",
+    "amber_dk": "8268BD",
+    "amber_wash": "F1EEF9",
+    "navy_dk": "5E43A0",
+    "navy_30": "CBD5E1",
+    "navy_12": "E2E8F0",
+    "on_navy": "F1F5F9",
+    "white": "FFFFFF",
+    "ink": "334155"
+  },
+  "_mapping": {
+    "navy": "표지 밴드·섹션·제목 (면적 45.0 자리)",
+    "chip": "요약 존 배경 (면적 21.8 자리)",
+    "amber": "작은 강조 — 룰·점 (면적 15.5 자리, 30개)",
+    "navy_55": "보조 글자·중간 톤 (면적 5.2 자리)",
+    "navy_dk": "흰 글씨를 얹는 밴드 배경 — 주색이 4.5:1 에 못 미칠 때 쓴다",
+    "amber_dk": "보조색 밴드 배경 — 같은 이유",
+    "ink": "본문 글자 (slate-700)"
+  }
+}

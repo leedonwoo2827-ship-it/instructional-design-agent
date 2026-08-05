@@ -468,17 +468,88 @@ async function secConn(box, ctx, cfg) {
   box.appendChild(c);
 }
 
+/** 로고 한 자리. 미리보기 + 고르기 + 지우기.
+ *  ★ multipart 대신 data URL 로 올린다 — python-multipart 를 안 늘리려는 것이다.
+ *  ★ 미리보기 주소에 시각을 붙인다. 안 붙이면 바꿔도 브라우저가 옛 그림을 보여 준다. */
+function logoSlot(n, title, where, cfg) {
+  const has = n === 1 ? cfg.logo : cfg.logo2;
+  const d = el("div", "logo-slot");
+  const head = el("div", "logo-slot-head");
+  head.append(el("b", null, title), el("span", "field-hint", where));
+  const prev = el("div", "logo-prev");
+  const draw = (on) => {
+    prev.innerHTML = "";
+    if (on) {
+      const img = el("img");
+      img.src = `/api/logo/${n}?t=${Date.now()}`;
+      img.alt = title;
+      prev.appendChild(img);
+    } else {
+      prev.appendChild(el("span", "logo-empty", "없음"));
+    }
+    prev.classList.toggle("on", !!on);
+  };
+  draw(has);
+
+  const file = el("input");
+  file.type = "file";
+  file.accept = "image/png,image/jpeg,image/webp";
+  file.hidden = true;
+  const pick = el("button", "btn sm");
+  pick.type = "button";
+  pick.textContent = has ? "바꾸기" : "고르기";
+  pick.addEventListener("click", () => file.click());
+  const del = el("button", "btn sm");
+  del.type = "button";
+  del.textContent = "지우기";
+  del.hidden = !has;
+
+  file.addEventListener("change", async () => {
+    const f = file.files?.[0];
+    if (!f) return;
+    if (f.size > 4 * 1024 * 1024) { toast("4MB 를 넘습니다.", "err"); return; }
+    pick.disabled = true;
+    try {
+      const data_url = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = () => rej(new Error("파일을 읽지 못했습니다."));
+        r.readAsDataURL(f);
+      });
+      const r = await api(`/api/logo/${n}`, { method: "PUT", body: { data_url } });
+      draw(true); del.hidden = false; pick.textContent = "바꾸기";
+      toast(r.message, "ok");
+    } catch (e) { toast(e.message, "err"); }
+    finally { pick.disabled = false; file.value = ""; }
+  });
+  del.addEventListener("click", async () => {
+    try {
+      const r = await api(`/api/logo/${n}`, { method: "DELETE" });
+      draw(false); del.hidden = true; pick.textContent = "고르기";
+      toast(r.message, "ok");
+    } catch (e) { toast(e.message, "err"); }
+  });
+
+  const row = el("div", "btn-row");
+  row.append(pick, del, file);
+  d.append(head, prev, row);
+  return d;
+}
+
 /* ── 슬라이드 양식 · 폰트 ─────────────────────────── */
 async function secDeck(box, ctx, cfg) {
+  // 로고 — 파일을 직접 고른다. 표지를 뺀 모든 슬라이드 상단에 들어간다.
   const c = el("div", "card");
-  c.appendChild(el("div", "card-title", "회사 PPT 양식"));
+  c.appendChild(el("div", "card-title", "로고"));
   c.appendChild(el("div", "hc-desc",
-    cfg.template
-      ? "적용 중입니다. 디자인 슬라이드가 이 양식의 마스터·테마·로고를 상속합니다."
-      : "기본 양식으로 만듭니다. 회사 양식을 쓰려면 assets/company_template.pptx 로 두세요."));
+    "로고1은 우상단, 로고2는 좌상단에 들어갑니다. 안 넣으면 그 자리는 비워 둡니다."));
+  const slots = el("div", "logo-slots");
+  [[1, "로고 1", "우상단 — 기본"], [2, "로고 2", "좌상단 — 있을 때만"]].forEach(
+    ([n, title, where]) => slots.appendChild(logoSlot(n, title, where, cfg)));
+  c.appendChild(slots);
   c.appendChild(el("div", "field-hint",
-    "로고는 양식의 슬라이드 마스터에 넣어두면 전 슬라이드에 표시됩니다. " +
-    "또는 assets/logo.png 를 두면 우상단에 자동 삽입됩니다. 파일은 로컬에만 저장됩니다."));
+    "PNG · JPG · WEBP, 4MB 까지. 높이 0.42인치로 맞춰 넣으므로 **가로로 긴 로고**가 " +
+    "잘 맞습니다. 파일은 이 PC 의 assets\ 에만 저장됩니다."));
   box.appendChild(c);
 
   const f = el("div", "card");

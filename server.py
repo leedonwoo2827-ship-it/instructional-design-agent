@@ -56,7 +56,9 @@ ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 ASSETS_DIR = ROOT / "assets"
 TEMPLATE_PATH = ASSETS_DIR / "company_template.pptx"
-LOGO_PATH = ASSETS_DIR / "logo.png"
+LOGO_PATH = ASSETS_DIR / "logo.png"     # 로고1 — 우상단(기본)
+LOGO2_PATH = ASSETS_DIR / "logo2.png"   # 로고2 — 좌상단(있을 때만)
+LOGO_SLOTS = {1: LOGO_PATH, 2: LOGO2_PATH}
 
 PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
@@ -86,6 +88,10 @@ def template_arg() -> Optional[str]:
 
 def logo_arg() -> Optional[str]:
     return str(LOGO_PATH) if LOGO_PATH.exists() else None
+
+
+def logo2_arg() -> Optional[str]:
+    return str(LOGO2_PATH) if LOGO2_PATH.exists() else None
 
 
 def settings() -> settings_mod.Settings:
@@ -221,8 +227,74 @@ def api_settings_get():
         "font": {"family": fs.regular, "embedded": fs.embedded},
         "template": TEMPLATE_PATH.exists(),
         "logo": LOGO_PATH.exists(),
+        "logo2": LOGO2_PATH.exists(),
+        "palettes": palette.available(),
+        "palette_default": palette.DEFAULT,
         "workspace": str(ws.ROOT),
     }
+
+
+# ── 로고 ───────────────────────────────────────────────────────────────────
+#   1 = 우상단(기본) · 2 = 좌상단. 없으면 그 자리는 그냥 빈다.
+#   multipart 대신 data URL 로 받는다 — python-multipart 를 안 늘리려는 것이고,
+#   로고는 수십 KB 라 JSON 으로 보내도 부담이 없다.
+_LOGO_MIME = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+
+
+@app.get("/api/logo/{slot}")
+def api_logo_get(slot: int):
+    p = LOGO_SLOTS.get(slot)
+    if not p or not p.exists():
+        raise HTTPException(404)
+    # 브라우저가 옛 로고를 계속 보여 주면 바꾼 걸 확인할 수 없다.
+    return FileResponse(str(p), headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/logo/{slot}")
+def api_logo_put(slot: int, body: Dict[str, Any] = Body(...)):
+    p = LOGO_SLOTS.get(slot)
+    if not p:
+        raise HTTPException(400, "로고 자리는 1(우상단) 또는 2(좌상단) 입니다.")
+    url = str(body.get("data_url") or "")
+    m = re.match(r"^data:([^;]+);base64,(.+)$", url, re.S)
+    if not m:
+        raise HTTPException(400, "이미지를 읽지 못했습니다.")
+    mime = m.group(1).lower()
+    if mime not in _LOGO_MIME:
+        raise HTTPException(400, f"PNG · JPG · WEBP 만 됩니다 (받은 형식: {mime})")
+    import base64
+    try:
+        raw = base64.b64decode(m.group(2), validate=True)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "이미지가 깨졌습니다.")
+    if len(raw) > 4 * 1024 * 1024:
+        raise HTTPException(400, "로고가 4MB 를 넘습니다.")
+    # 확장자와 무관하게 .png 로 저장한다 — deck_builder 가 경로 하나만 본다.
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(raw))
+        im.load()
+        w, h = im.size
+        ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+        im.convert("RGBA").save(p, "PNG")
+    except ImportError:
+        ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(raw)
+        w = h = 0
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"이미지를 열지 못했습니다: {e}")
+    return {"ok": True, "slot": slot, "path": str(p), "w": w, "h": h,
+            "message": f"로고{slot} 저장 ({w}x{h})" if w else f"로고{slot} 저장"}
+
+
+@app.delete("/api/logo/{slot}")
+def api_logo_del(slot: int):
+    p = LOGO_SLOTS.get(slot)
+    if not p:
+        raise HTTPException(400, "로고 자리는 1 또는 2 입니다.")
+    if p.exists():
+        p.unlink()
+    return {"ok": True, "slot": slot, "message": f"로고{slot} 제거"}
 
 
 @app.put("/api/settings")
@@ -419,7 +491,8 @@ def api_week_get(pid: int, week: int):
         # 배색 — 이 주차가 쓸 값(해석 결과)과 고를 수 있는 목록.
         # ★ 'template' 이 아니라 'palette' 다. template 은 회사 PPTX 양식을 뜻한다.
         "palette": resolve_palette(pid, p, week),
-        "palette_pinned": bool((ws.week_cfg(pid, p["name"], week).get("palette") or "").strip()),
+        "palette_pinned": (ws.week_cfg(pid, p["name"], week).get("palette") or "").strip()
+                          in palette.names(),
         "palettes": palette.available(),
         # 덱은 단계별 폴더에 흩어져 있다 — 어느 단계 산출물인지 함께 돌려준다.
         "decks": [
@@ -709,6 +782,11 @@ def resolve_palette(pid: int, p: Dict[str, Any], week: int,
             raise HTTPException(400, f"없는 배색입니다: {want}")
         ws.save_week_cfg(pid, name, week, palette=want)
     picked = (ws.week_cfg(pid, name, week).get("palette") or "").strip()
+    if picked and picked not in palette.names():
+        # 템플릿이 지워졌다. 조용히 다른 색으로 빌드되면 왜 바뀌었는지 알 수 없으므로
+        # 고정을 풀어 화면에 '기본값 사용' 으로 보이게 한다.
+        ws.save_week_cfg(pid, name, week, palette="")
+        picked = ""
     if not picked:
         picked = (settings().palette or "").strip()
     return picked if picked in palette.names() else palette.DEFAULT
@@ -724,7 +802,8 @@ def _build_and_save(pid: int, p: Dict[str, Any], week: int, step: str,
     title = deck_stem(form, week)
     data = deck_builder.build_deck(
         plan, template_path=template_arg(), images=images, deck_title=title,
-        logo_path=logo_arg(), footer=f"{course} · {week}주차", embed_font=embed_font,
+        logo_path=logo_arg(), logo2_path=logo2_arg(),
+        footer=f"{course} · {week}주차", embed_font=embed_font,
         template=pal or resolve_palette(pid, p, week))
     if not data:
         raise RuntimeError("슬라이드 빌드 실패(python-pptx 확인).")

@@ -623,15 +623,37 @@ def add_footer_key(slide, text, y=None):
     _run(p, text, 13.5, "navy", "sb")
 
 
-def add_logo(slide, logo_path):
+LOGO_Y, LOGO_H = 0.28, 0.42       # 상단 로고 띠 — 키커(0.52)와 겹치는 높이다
+
+
+def add_logos(slide, logo_path, logo2_path=None) -> float:
+    """상단 로고. 로고1은 **우상단**, 로고2는 **좌상단**.
+
+    반환 = 좌상단 로고가 차지한 폭(in). 0 이면 없다.
+    ★ 이 값이 필요한 이유: 키커(0.52~0.76)가 로고 띠(0.28~0.70)와 겹친다.
+      좌상단에 로고가 오면 키커를 그만큼 오른쪽으로 밀어야 글자가 안 겹친다.
+      로고 폭은 그림 비율에 따라 다르므로 **넣어 보고 재는** 수밖에 없다.
+
+    로고가 없으면 그 자리는 그냥 빈다 — 자리표시를 그리지 않는다.
+    """
     from pptx.util import Inches
-    if not logo_path or not os.path.isfile(logo_path):
-        return
-    try:
-        slide.shapes.add_picture(logo_path, Inches(SLIDE_W - 1.85), Inches(0.28),
-                                 height=Inches(0.42))
-    except Exception:  # noqa: BLE001
-        pass
+    left_w = 0.0
+    if logo2_path and os.path.isfile(logo2_path):
+        try:
+            pic = slide.shapes.add_picture(logo2_path, Inches(MARGIN), Inches(LOGO_Y),
+                                           height=Inches(LOGO_H))
+            left_w = (pic.width or 0) / 914400
+        except Exception:  # noqa: BLE001
+            pass
+    if logo_path and os.path.isfile(logo_path):
+        try:
+            pic = slide.shapes.add_picture(logo_path, Inches(0), Inches(LOGO_Y),
+                                           height=Inches(LOGO_H))
+            # 오른쪽 끝을 맞춘다 — 폭이 로고마다 달라 좌표를 박아 두면 삐뚤어진다.
+            pic.left = Inches(CONTENT_R - (pic.width or 0) / 914400)
+        except Exception:  # noqa: BLE001
+            pass
+    return left_w
 
 
 def add_running(slide, footer_text: str, page: Optional[int]):
@@ -648,8 +670,9 @@ def add_running(slide, footer_text: str, page: Optional[int]):
 
 
 def _head(slide, s, *, has_logo=False, rule=True):
-    """상단 존(키커 → 제목 → 앰버 룰) 공통 처리. 반환 = 칩 시작 y."""
-    add_kicker(slide, s.get("kicker"))
+    """상단 존(키커 → 제목 → 룰) 공통 처리. 반환 = 요약줄 시작 y."""
+    # 좌상단 로고가 있으면 키커를 그 오른쪽으로 민다(같은 높이라 겹친다).
+    add_kicker(slide, s.get("kicker"), x=MARGIN + float(s.get("_kicker_dx") or 0.0))
     add_title(slide, s.get("title", ""), has_logo=has_logo)
     if rule:
         add_rule(slide)
@@ -1217,6 +1240,7 @@ def build_deck(plan: List[Dict], template_path: Optional[str] = None,
                images: Optional[Dict[int, bytes]] = None,
                deck_title: str = "강의 슬라이드",
                logo_path: Optional[str] = None, *,
+               logo2_path: Optional[str] = None,
                footer: str = "", assets_dir=None,
                embed_font: bool = True,
                template: Optional[str] = None) -> Optional[bytes]:
@@ -1278,6 +1302,7 @@ def build_deck(plan: List[Dict], template_path: Optional[str] = None,
         _log("[font] 임베드 끄기 — Pretendard 이름만 지정")
 
     has_logo = bool(logo_path and os.path.isfile(logo_path))
+    has_logo2 = bool(logo2_path and os.path.isfile(logo2_path))
     layout = _blank_layout(prs)
     photo_ord = 0
     sec_num = 0
@@ -1295,6 +1320,13 @@ def build_deck(plan: List[Dict], template_path: Optional[str] = None,
             sec_num += 1
             s.setdefault("num", sec_num)
         s["_has_logo"] = has_logo
+        # ★ 로고를 **먼저** 놓는다. 좌상단 로고의 실제 폭을 알아야 키커를 밀 수 있고,
+        #   폭은 그림을 넣어 봐야 안다. 표지는 자체 레이아웃이라 넣지 않는다.
+        s["_kicker_dx"] = 0.0
+        if typ != "cover" and (has_logo or has_logo2):
+            lw = add_logos(slide, logo_path if has_logo else None,
+                           logo2_path if has_logo2 else None)
+            s["_kicker_dx"] = (lw + 0.22) if lw else 0.0
         fn = _RENDER.get(typ, render_bullets)
         try:
             fn(slide, s, images.get(i))
@@ -1307,8 +1339,6 @@ def build_deck(plan: List[Dict], template_path: Optional[str] = None,
                 pass
         if typ not in _NO_RUNNING:
             add_running(slide, footer, i + 1)
-        if typ != "cover":
-            add_logo(slide, logo_path)
 
     if fallbacks:
         _log(f"[deck] 폴백 렌더된 슬라이드: {fallbacks}")

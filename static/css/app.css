@@ -706,3 +706,26 @@ label.check input { width: auto; }
   .panel-body { padding: 14px 16px 22px; }
   .field-2 { grid-template-columns: 1fr; }
 }
+
+/* ── 로고 두 자리 ─────────────────────────────────── */
+.logo-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+.logo-slot {
+  border: 1px solid var(--hairline); border-radius: 10px; padding: 10px;
+  background: var(--white);
+}
+.logo-slot-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.logo-slot-head b { font-size: var(--t-sm); }
+/* 체크무늬 — 투명 배경 로고의 여백을 눈으로 확인할 수 있어야 한다. */
+.logo-prev {
+  display: flex; align-items: center; justify-content: center;
+  height: 64px; margin-bottom: 9px; border-radius: 8px;
+  border: 1px dashed var(--hairline);
+  background:
+    linear-gradient(45deg, var(--paper) 25%, transparent 25%, transparent 75%, var(--paper) 75%) 0 0/14px 14px,
+    linear-gradient(45deg, var(--paper) 25%, transparent 25%, transparent 75%, var(--paper) 75%) 7px 7px/14px 14px,
+    var(--white);
+}
+.logo-prev.on { border-style: solid; }
+.logo-prev img { max-height: 48px; max-width: 92%; object-fit: contain; }
+.logo-empty { font-size: var(--t-xs); color: var(--text-3); }
+@media (max-width: 620px) { .logo-slots { grid-template-columns: 1fr; } }
