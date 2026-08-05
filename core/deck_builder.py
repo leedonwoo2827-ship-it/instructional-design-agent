@@ -42,7 +42,7 @@ _HEX = {
     "navy_55":  (0x83, 0x88, 0xA8),   # 3단계·키커·캡션
     "navy_30":  (0xBB, 0xBE, 0xD0),   # 비활성·대형 숫자
     "navy_12":  (0xE4, 0xE5, 0xEC),   # 헤어라인 링
-    "chip":     (0xEE, 0xF2, 0xFB),   # 요약칩·존 배경
+    "chip":     (0xEE, 0xF2, 0xFB),   # 존 배경·표 짝수행·사진 자리 워시
     "amber":    (0xF2, 0xA9, 0x00),   # 마커·강조 채움 (텍스트 금지)
     "amber_dk": (0xB5, 0x7F, 0x00),   # 앰버 계열 텍스트가 꼭 필요할 때
     "amber_wash": (0xFD, 0xF3, 0xDC),  # 강조 존 배경
@@ -158,6 +158,28 @@ def band(name: str, min_ratio: float = 4.5) -> str:
     if dk in _HEX and _best(dk) > _best(name):
         return dk
     return name
+
+
+def on_white(name: str, min_ratio: float = 4.5) -> str:
+    """**흰 바탕 위 글자색** — 대비가 모자라면 `<name>_dk`, 그래도 안 되면 `ink`.
+
+    band() 와 헷갈리면 안 된다. band() 는 *배경* 을 고르고, 이건 *글자* 를 고른다.
+    칩이 배경(연한 알약)을 잃고 흰 바탕에 놓이면서 필요해졌다 —
+    리디자인의 navy(#2E93D9)는 연한 칩 위에서는 괜찮았지만
+    흰 바탕에서는 3.34:1 로 떨어진다.
+    """
+    def ratio(a: float, b: float) -> float:
+        hi, lo = max(a, b), min(a, b)
+        return (hi + 0.05) / (lo + 0.05)
+
+    w = luminance("white")
+    for cand in (name, f"{name}_dk", "ink"):
+        try:
+            if ratio(luminance(cand), w) >= min_ratio:
+                return cand
+        except Exception:  # noqa: BLE001 — 템플릿에 없는 키
+            continue
+    return "ink"
 
 
 def on_color(bg: str, light: str = "white", dark: str = "ink") -> str:
@@ -490,18 +512,28 @@ def add_rule(slide, y=RULE_Y, x=MARGIN, w=RULE_W, color="amber"):
 
 
 def add_chip(slide, text, x=MARGIN, y=CHIP_Y, w=CONTENT_W, emphasis=False):
-    """요약칩: 라운드 배경 + 앰버 점 + 한 문장. 반환 = 칩 하단 y."""
+    """한 줄 요약. **글꼴로만** 쓴다 — 반환 = 하단 y.
+
+    예전에는 라운드 배경 + 앰버 점 + 한 문장이었다. 뺀 이유:
+      · 알약이 슬라이드마다 반복되니 제목보다 먼저 눈에 들어와 위계가 뒤집혔다
+      · 배경색이 사진·도해와 부딪혀 화면이 시끄러웠다
+    강조는 색을 채우지 않고 **더 진한 청색**으로 한다.
+
+    ★ 높이(CHIP_H)는 그대로 둔다. 이 함수가 돌려주는 y 를 13종 레이아웃이
+      본문 시작점으로 쓰기 때문에, 줄이면 전 레이아웃의 배치가 한꺼번에 틀어진다.
+      배경이 없어진 만큼 위아래 여백이 되어 소제목처럼 읽힌다.
+    """
     if not text:
         return y
     t = TYPE["chip"]
-    inner_w = w - 0.78
-    pt = _fit([text], inner_w, CHIP_H - 0.16, t["size"], t["line"],
+    # 강조는 색이 아니라 **크기**로 준다. 기본 배색은 navy 가 이미 13.8:1 이라
+    # 더 진한 단계가 없어서, 색만으로는 두 템플릿 중 한쪽에서 차이가 안 난다.
+    base = t["size"] + (1.5 if emphasis else 0.0)
+    pt = _fit([text], w, CHIP_H - 0.16, base, t["line"],
               min_pt=11.5, label=f"chip:{str(text)[:18]}")
-    _rrect(slide, x, y, w, CHIP_H, fill=("navy" if emphasis else "chip"), pill=True)
-    _oval(slide, x + 0.26, y + CHIP_H / 2 - 0.09, 0.18, "amber")
-    tf = _text(slide, x + 0.58, y, inner_w, CHIP_H, anchor="m")
+    tf = _text(slide, x, y, w, CHIP_H, anchor="m")
     _T(_para(tf, True, line=t["line"]), text, "chip", size=pt,
-       color=("white" if emphasis else "navy"))
+       color=on_white("navy"))
     return y + CHIP_H
 
 
@@ -628,10 +660,10 @@ def _head(slide, s, *, has_logo=False, rule=True):
 # img=(L,T,W,H), tx/tw=텍스트 열, below=이미지가 하단(본문은 위 전폭).
 # 사진 슬라이드 '순번'으로 순환한다(절대 인덱스 아님) — 배치 반복 방지.
 #
-# 세로 기준(첨삭 2026-08-03): 옆단 사진은 **요약칩 윗선(1.88")에 top 을 맞추고**
+# 세로 기준(첨삭 2026-08-03): 옆단 사진은 **요약줄 윗선(1.88")에 top 을 맞추고**
 # 콘텐츠 하단(6.57")까지 내린다. 본문 시작선(2.95")에서 시작하면 칩 옆이 비어
 # 위쪽이 헐거워 보인다. 폭만 바꿔 변화를 준다(높이를 줄이면 정렬이 깨진다).
-PHOTO_TOP = CHIP_Y          # 1.88 — 요약칩 윗선
+PHOTO_TOP = CHIP_Y          # 1.88 — 요약줄 윗선
 PHOTO_BOT = 6.57            # 콘텐츠 하단(러닝 푸터 위)
 _PH = PHOTO_BOT - PHOTO_TOP  # 4.69
 
