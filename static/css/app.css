@@ -200,6 +200,46 @@ body[data-rail="collapsed"] .side-nav a > span:not(.i) { display: none; }
 .side-nav-sep { height: 1px; margin: 7px 10px; background: var(--hairline); }
 body[data-rail="collapsed"] .side-nav-sep { margin: 7px 8px; }
 
+/* 렌더 진행 — 1시간 넘는 작업이라 어느 화면에 있어도 보여야 한다.
+   눈에 띄되 방해하지 않게: 레일 폭 안에 얇게. */
+.render-bar {
+  display: block; margin: 14px 10px 0; padding: 9px 10px 10px;
+  border: 1px solid var(--hairline); border-radius: 10px;
+  background: var(--sky-wash);
+  text-decoration: none; color: inherit; cursor: pointer;
+}
+.render-bar:hover { border-color: var(--sky-500); }
+.render-bar[hidden] { display: none; }
+.render-bar-top {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 6px; font-size: var(--t-xs);
+}
+.render-bar-top #render-bar-title { font-weight: 700; color: var(--text); }
+.render-bar-pct {
+  font-variant-numeric: tabular-nums; font-weight: 700; color: var(--sky-500);
+}
+.render-bar-track {
+  display: block; height: 4px; margin: 7px 0 6px; border-radius: 999px;
+  background: var(--hairline); overflow: hidden;
+}
+.render-bar-fill {
+  display: block; height: 100%; width: 0%; border-radius: 999px;
+  background: var(--sky-500); transition: width .4s ease;
+}
+.render-bar-msg {
+  display: block; font-size: var(--t-2xs); color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 하드 킬된 렌더 — '완료' 로 보이면 안 된다. 상태색을 쓴다. */
+.render-bar.dead { border-color: var(--err); background: var(--err-wash); }
+.render-bar.dead .render-bar-pct { color: var(--err); }
+.render-bar.dead .render-bar-fill { background: var(--err); }
+/* 레일을 접으면 글자는 숨고 막대만 남는다 — 폭이 없다. */
+body[data-rail="collapsed"] .render-bar { margin: 12px 8px 0; padding: 7px 6px; }
+body[data-rail="collapsed"] .render-bar-top,
+body[data-rail="collapsed"] .render-bar-msg { display: none; }
+body[data-rail="collapsed"] .render-bar-track { margin: 0; }
+
 .side-section { display: flex; align-items: baseline; justify-content: space-between; margin: 22px 10px 6px; }
 .side-section-title {
   font-size: var(--t-2xs); color: var(--text-3); font-weight: 700;

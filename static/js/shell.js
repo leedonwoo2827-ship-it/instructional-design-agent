@@ -346,6 +346,66 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+/* ── 렌더 진행 표시 ─────────────────────────────────
+ * 영상 렌더는 1시간이 넘는다. 사람이 그 화면을 지키고 있을 수 없고, 다른 주차나
+ * 교재를 만들다가 돌아온다. 그래서 **레일에 늘 붙여 둔다** — 돌고 있지 않으면 숨는다.
+ *
+ * 폴링 간격을 나눈다: 도는 중 5초, 없으면 25초. 진행 중일 때만 자주 물으면 되고,
+ * 노는 동안 5초마다 15개 파일을 읽을 이유가 없다.
+ */
+const RENDER_POLL_RUN = 5000;
+const RENDER_POLL_IDLE = 25000;
+let renderTimer = null;
+
+async function pollRenders() {
+  const bar = $("#render-bar");
+  if (!bar) return RENDER_POLL_IDLE;
+  let jobs = [];
+  try {
+    const p = await getProject();
+    if (p) jobs = (await api(`/api/video/running?project_id=${p.id}`)).jobs || [];
+  } catch {
+    // 서버가 잠깐 없을 수 있다(재시작). 표시만 숨기고 계속 물어본다.
+    bar.hidden = true;
+    return RENDER_POLL_IDLE;
+  }
+  if (!jobs.length) {
+    bar.hidden = true;
+    return RENDER_POLL_IDLE;
+  }
+  // 여러 주차가 동시에 돌 일은 없지만(단일 실행 락), 있으면 첫 번째를 보여 준다.
+  const j = jobs[0];
+  const wk = String(j.week).padStart(2, "0");
+  const pct = Math.round((j.ratio || 0) * 100);
+  bar.hidden = false;
+  bar.classList.toggle("dead", !!j.died);
+  bar.href = `#/video?week=${j.week}`;
+  $("#render-bar-title").textContent = j.died
+    ? `${wk}주차 렌더 중단됨` : `${wk}주차 영상 렌더`;
+  $("#render-bar-pct").textContent = j.died ? "!" : `${pct}%`;
+  $("#render-bar-fill").style.width = `${j.died ? 100 : pct}%`;
+  $("#render-bar-msg").textContent =
+    j.died ? "다시 눌러 이어서 만드세요" : (j.summary || j.message || j.stage || "");
+  bar.title = j.died
+    ? `${wk}주차 렌더가 끝나지 않고 멈췄습니다. 눌러서 확인하세요.`
+    : `${wk}주차 · ${j.summary || j.stage} · ${j.message || ""}`;
+  return j.died ? RENDER_POLL_IDLE : RENDER_POLL_RUN;
+}
+
+function scheduleRenderPoll(ms) {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(async () => {
+    scheduleRenderPoll(await pollRenders());
+  }, ms);
+}
+// 탭이 숨으면 멈춘다 — 배경 탭에서 5초마다 두드릴 이유가 없다.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) clearTimeout(renderTimer);
+  else scheduleRenderPoll(0);
+});
+scheduleRenderPoll(0);
+window.addEventListener("ida:course-changed", () => scheduleRenderPoll(0));
+
 window.addEventListener("hashchange", render);
 window.addEventListener("ida:course-changed", () => { invalidate(); refreshRail(); });
 window.addEventListener("ida:project-list-changed", () => refreshRail());

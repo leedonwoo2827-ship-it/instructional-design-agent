@@ -1207,6 +1207,39 @@ def api_video_render(body: Dict[str, Any] = Body(...)):
     return {"ok": True, **r}
 
 
+@app.get("/api/video/running")
+def api_video_running(project_id: int = Query(...)):
+    """이 강좌에서 **지금 돌고 있는 렌더**. 어느 화면에 있어도 보이게 하려고 둔다.
+
+    렌더는 1시간이 넘어서 사람이 그 화면을 지키고 있지 않는다. 다른 일을 하다
+    돌아오는 게 정상이고, 그때 '어디까지 갔나' 를 물어볼 데가 있어야 한다.
+
+    주차 폴더의 progress.json 만 읽는다 — 15주차라도 파일 15개라 가볍다.
+    """
+    p = need_project(project_id)
+    name = p["name"]
+    out: List[Dict[str, Any]] = []
+    for wk in range(1, n_weeks(p["form"] or {}) + 1):
+        vd = ws.video_dir(project_id, name, wk, create=False)
+        if not (vd / ws.F_PROGRESS).is_file():
+            continue
+        pr = video_mod.read_progress(vd)
+        if not pr:
+            continue
+        running, died = video_mod.running(vd), video_mod.died(pr)
+        if not running and not died:
+            continue          # 끝난 렌더는 알릴 것이 없다 — 완성 영상이 곧 결과다
+        out.append({
+            "week": wk, "running": running, "died": died,
+            "stage": pr.get("stage") or "", "ratio": video_mod.overall_ratio(pr),
+            "summary": video_mod.summary(pr),
+            "message": pr.get("message") or "",
+            "done": pr.get("done") or 0, "total": pr.get("total") or 0,
+            "updated_at": pr.get("updated_at") or "",
+        })
+    return {"jobs": out}
+
+
 @app.post("/api/video/cancel")
 def api_video_cancel(body: Dict[str, Any] = Body(...)):
     pid, week = int(body["project_id"]), int(body["week"])

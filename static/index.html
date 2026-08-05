@@ -46,6 +46,17 @@
         <span data-icon="film"></span><span>영상 <em class="nav-dest">주차별</em></span></a></li>
     </ul>
 
+    <!-- 렌더는 1시간이 넘는다. 그 화면을 지키고 있을 수 없으니, 어느 화면에
+         있어도 여기서 보인다. 돌고 있지 않으면 통째로 숨는다. -->
+    <a class="render-bar" id="render-bar" href="#/video" hidden>
+      <span class="render-bar-top">
+        <span id="render-bar-title">영상 렌더</span>
+        <span class="render-bar-pct" id="render-bar-pct"></span>
+      </span>
+      <span class="render-bar-track"><span class="render-bar-fill" id="render-bar-fill"></span></span>
+      <span class="render-bar-msg" id="render-bar-msg"></span>
+    </a>
+
     <!-- 강좌를 고르기 전에는 강좌 목록, 고른 뒤에는 주차 목록이 된다.
          슬라이드는 주차마다 여러 번 빌드하므로 진행 상태가 늘 보여야 한다. -->
     <div class="side-section">
